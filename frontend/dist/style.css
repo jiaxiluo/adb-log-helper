@@ -1,0 +1,704 @@
+/* ============================================================================
+   文件名称 : style.css
+   功    能 : ADB 工具前台页面的样式表。
+             采用卡片式布局 + 柔和配色，适配桌面窗口尺寸。
+   布局要点: 整页为纵向 flex —— 上方主区可滚动，底部「操作反馈」栏固定，
+             保证任何操作的结果无需滚动页面即可看到。
+   ============================================================================ */
+
+/* ---------- 全局基础 ---------- */
+* {
+    box-sizing: border-box;      /* 统一盒模型，宽高包含内边距与边框 */
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    /* 主题色变量，集中管理配色，便于后续调整 */
+    --bg: #f4f6f9;               /* 页面背景 */
+    --card: #ffffff;             /* 卡片背景 */
+    --border: #e5e9f0;           /* 边框颜色 */
+    --primary: #2563eb;          /* 主色（蓝） */
+    --primary-hover: #1d4ed8;    /* 主色悬停 */
+    --success: #16a34a;          /* 成功（绿） */
+    --danger: #dc2626;           /* 危险（红） */
+    --text: #1f2937;             /* 主文字 */
+    --text-muted: #6b7280;       /* 次要文字 */
+    --radius: 10px;              /* 圆角 */
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+
+    /* 整页纵向 flex：所有区块固定在一个图层内，页面本身永不滚动 */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ---------- 顶部标题栏 ---------- */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    flex-shrink: 0;              /* 顶部栏不参与压缩 */
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.title {
+    font-size: 20px;
+    font-weight: 700;
+}
+
+/* ---------- 状态徽标 ---------- */
+.badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+}
+.badge-unknown { background: #f1f5f9; color: #64748b; }
+.badge-ok      { background: #dcfce7; color: #15803d; }
+.badge-error   { background: #fee2e2; color: #b91c1c; }
+
+/* ---------- 卡片 ---------- */
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.card-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.card-title h2 {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.hint {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* ---------- 主区（固定图层：内容超高时各面板内部滚动，页面整体不滚动） ---------- */
+.main-area {
+    flex: 1;                     /* 占据底部反馈栏以外的全部空间 */
+    min-height: 0;               /* 允许 flex 子项收缩 */
+    display: flex;
+    flex-direction: column;
+    /* 极小窗口时的兜底：主区内部整体滚动，保证任何内容都不会被裁剪到不可达；
+       正常/非全屏尺寸下由各面板的最小高度保证不触发这里 */
+    overflow-y: auto;
+}
+
+/* 主区内的固定高度卡片（设备连接 / 日志抓取）不参与压缩 */
+.main-area > .card {
+    flex-shrink: 0;
+    margin-bottom: 12px;
+}
+
+/* ---------- 第一栏：设备连接 + 应用管理（左右布局，均分纵向空间） ---------- */
+.main-row1 {
+    flex: 1;                     /* 占据第一栏可用的全部剩余高度 */
+    min-height: 240px;           /* 非全屏关键保障：卡片自身开销约 138px，剩余空间保证列表 ≥2 行 */
+    display: grid;
+    grid-template-columns: 1fr 1.15fr; /* 右侧应用管理略宽（列表内容多） */
+    gap: 12px;
+    align-items: stretch;        /* 两卡同高 */
+}
+
+/* 第一栏中的卡片：纵向 flex，内容区占满剩余高度 */
+.main-row1 .card {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+/* ---------- 表单控件 ---------- */
+.input,
+.select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text);
+    background: #fff;
+    outline: none;
+    transition: border-color .15s;
+}
+.input:focus,
+.select:focus {
+    border-color: var(--primary);
+}
+
+.select {
+    max-width: 420px;
+}
+.select-wide {
+    max-width: none;             /* 设备下拉框占满整行 */
+}
+
+/* 连接端口输入框：窄列即可 */
+.port-input {
+    max-width: 130px;
+}
+
+/* 复选框标签（如「仅第三方」）：不换行、留白适中 */
+.checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+/* ---------- 按钮 ---------- */
+.btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+    white-space: nowrap;
+}
+.btn:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+}
+.btn:active {
+    transform: translateY(1px);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #2563eb, #4f46e5);
+    border: none;
+    color: #fff;
+    box-shadow: 0 2px 10px rgba(37, 99, 235, .3);
+}
+.btn-primary:hover {
+    background: linear-gradient(135deg, #1d4ed8, #4338ca);
+    box-shadow: 0 4px 16px rgba(37, 99, 235, .45);
+}
+
+.btn-success { background: var(--success); border-color: var(--success); color: #fff; }
+.btn-success:hover { background: #15803d; border-color: #15803d; }
+
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger:hover { background: #b91c1c; border-color: #b91c1c; }
+
+.btn-ghost { background: transparent; }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+/* ---------- 横向排列 ---------- */
+.row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.row .input {
+    flex: 1;   /* 输入框占满剩余宽度 */
+}
+
+/* ---------- 第二栏：文件与设备操作（整行 4 列横排，窄窗口自动换行） ---------- */
+.ops-grid4 {
+    display: grid;
+    /* 宽度足够时 4 张操作卡一行；变窄时自动换为 2 行，不出现横向滚动 */
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 10px;
+    align-items: stretch;        /* 同行操作卡等高 */
+}
+
+.op-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #fafbfd;
+}
+
+.op-name {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+/* ---------- 应用列表（应用管理卡，内部滚动） ---------- */
+.app-list {
+    flex: 1;                     /* 占满卡片剩余高度 */
+    min-height: 100px;           /* 非全屏关键保障：单行实测约 43px，至少完整展示 2 行再进入滚动 */
+    margin-top: 8px;
+    overflow-y: auto;            /* 应用过多时列表内部滚动 */
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fafbfd;
+}
+
+/* 单行应用：包名在左、操作按钮在右 */
+.app-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.app-row:last-child {
+    border-bottom: none;         /* 最后一行不需要分隔线 */
+}
+.app-row:hover {
+    background: #f1f5f9;         /* 悬停高亮，便于对准行内按钮 */
+}
+
+.app-pkg {
+    font-family: Consolas, "Courier New", monospace; /* 包名用等宽字体更易读 */
+    font-size: 12.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;     /* 过长包名截断显示（悬停可见全名） */
+    white-space: nowrap;
+}
+
+.app-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;              /* 按钮不被压缩 */
+}
+
+/* ---------- 向导步骤指示器 ---------- */
+.env-steps {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.env-step {
+    font-size: 13px;
+    color: var(--text-muted);    /* 未开始的步骤：灰色 */
+}
+.env-step-active {
+    color: var(--primary);       /* 当前步骤：蓝色加粗 + 光晕小圆点 */
+    font-weight: 700;
+    text-shadow: 0 0 12px rgba(37, 99, 235, .45);
+}
+.env-step-done {
+    color: var(--success);       /* 已完成步骤：绿色 */
+}
+.env-step-sep {
+    color: #cbd5e1;              /* 步骤间的连接线 */
+    font-size: 12px;
+}
+
+/* 状态文字：稍大、占位稳定（状态变化时高度不跳动） */
+.env-status {
+    font-size: 15px;
+    line-height: 1.6;
+    min-height: 48px;
+    word-break: break-all;
+}
+
+/* 补充信息（路径/失败原因），等宽字体便于阅读路径 */
+.env-detail {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    word-break: break-all;
+    margin-bottom: 6px;
+    min-height: 18px;
+}
+
+/* ---------- ADB 环境准备向导（科技感玻璃卡片） ---------- */
+/* 首次运行 / 未安装 ADB 时覆盖整个窗口，阻断主界面操作直至环境就绪 */
+.env-overlay {
+    position: fixed;
+    inset: 0;                     /* 铺满窗口 */
+    /* 深色渐变遮罩 + 轻微模糊，营造纵深感 */
+    background: linear-gradient(160deg, rgba(15, 23, 42, .55), rgba(30, 41, 89, .45));
+    backdrop-filter: blur(3px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;                 /* 盖住主界面 */
+}
+
+.env-card {
+    width: 500px;
+    background: rgba(255, 255, 255, .92);
+    backdrop-filter: blur(12px);  /* 玻璃拟态 */
+    border-radius: 14px;
+    padding: 30px;
+    /* 科技感：霓虹渐变描边 + 双层光晕 */
+    border: 1px solid rgba(99, 102, 241, .25);
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, .6) inset,
+        0 20px 60px rgba(2, 6, 23, .35),
+        0 0 48px rgba(59, 130, 246, .18);
+}
+
+.env-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    /* 渐变文字标题 */
+    background: linear-gradient(120deg, #2563eb, #7c3aed);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    letter-spacing: .5px;
+}
+
+.env-title {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 14px;
+}
+
+/* 状态文字：检测中 / 未安装 / 安装进度说明 */
+.env-status {
+    font-size: 14px;
+    line-height: 1.7;
+    min-height: 48px;             /* 状态变化时卡片高度不跳动 */
+    word-break: break-all;
+}
+
+/* 下载进度条 */
+.env-progress-wrap {
+    margin-top: 12px;
+}
+.env-progress-track {
+    height: 8px;
+    border-radius: 999px;
+    background: #e5e9f0;
+    overflow: hidden;
+}
+.env-progress-bar {
+    height: 100%;
+    border-radius: 999px;
+    /* 科技感渐变进度条 + 流光动画 */
+    background: linear-gradient(90deg, #2563eb, #7c3aed);
+    box-shadow: 0 0 10px rgba(59, 130, 246, .55);
+    transition: width .2s;
+}
+.env-progress-wrap .hint {
+    margin-top: 6px;
+    display: block;
+}
+
+/* 手动安装选项按钮区 */
+.env-options {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* ---------- 底部固定：操作反馈面板（VS Code 终端面板模式） ---------- */
+/* 固定高度是关键：面板高度不随内容增长，文本在面板内部滚动，
+   从根本上避免"反馈越多面板越高、把上方功能区压到不可用"的问题 */
+.output-panel {
+    flex-shrink: 0;              /* 不被压缩 */
+    flex-grow: 0;                /* 也不随内容增长 */
+    height: 180px;               /* 固定高度（可拖拽调整） */
+    margin-bottom: 0;            /* 贴住窗口底部 */
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;            /* 内容溢出统一交给 cmd-area 滚动 */
+}
+
+/* 收起状态：只保留标题条高度（卡片内边距32 + 标题行~24 + 标题下边距12） */
+.output-panel.collapsed {
+    height: 68px;
+}
+.output-panel.collapsed .cmd-area,
+.output-panel.collapsed .output-resize {
+    display: none;
+}
+
+/* 顶部拖拽把手：横贯面板顶部的细条，悬停高亮 */
+.output-resize {
+    height: 7px;
+    flex-shrink: 0;
+    /* 负 margin 抵消卡片内边距，让把手横贯整个卡片顶部 */
+    margin: -16px -16px 8px -16px;
+    cursor: ns-resize;           /* 上下调整光标 */
+    border-radius: var(--radius) var(--radius) 0 0;
+    transition: background .15s;
+}
+.output-resize:hover {
+    background: rgba(37, 99, 235, .15); /* 悬停高亮，提示可拖拽 */
+}
+
+/* 标题栏右侧按钮组 */
+.output-title-btns {
+    display: flex;
+    gap: 8px;
+}
+
+.cmd-area {
+    flex: 1;
+    min-height: 0;               /* 允许在固定高度面板内收缩，滚动生效的关键 */
+    padding: 10px;
+    border-radius: 6px;
+    background: #0f172a;            /* 深色背景，类似终端 */
+    color: #e2e8f0;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;          /* 保留换行并自动换行 */
+    word-break: break-all;
+    overflow-y: auto;               /* 内容超出在面板内部滚动 */
+}
+
+/* ---------- 自定义确认弹窗（深色科技感，替代原生 confirm） ---------- */
+.modal-overlay {
+    position: fixed;
+    inset: 0;                     /* 铺满窗口 */
+    /* 深色遮罩 + 模糊，聚焦弹窗内容 */
+    background: rgba(2, 6, 23, .55);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;                 /* 盖住环境向导（z-index:100）在内的全部内容 */
+}
+
+.modal-card {
+    width: 420px;
+    border-radius: 14px;
+    padding: 26px;
+    text-align: center;
+    /* 深色玻璃卡片：深蓝渐变底 + 霓虹青描边 + 双层光晕 */
+    background: linear-gradient(165deg, #111a2e 0%, #0b1220 100%);
+    border: 1px solid rgba(56, 189, 248, .35);
+    box-shadow:
+        0 20px 60px rgba(0, 0, 0, .5),
+        0 0 40px rgba(56, 189, 248, .15);
+    color: #e2e8f0;
+    /* 入场动画：轻微上浮 + 缩放 */
+    animation: modal-in .18s ease-out;
+}
+@keyframes modal-in {
+    from { transform: translateY(10px) scale(.97); opacity: 0; }
+    to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.modal-icon {
+    font-size: 34px;
+    margin-bottom: 8px;
+    /* 图标光晕 */
+    filter: drop-shadow(0 0 14px rgba(251, 191, 36, .5));
+}
+
+.modal-title {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: #f8fafc;
+}
+
+.modal-message {
+    font-size: 13px;
+    line-height: 1.8;
+    color: #cbd5e1;
+    word-break: break-all;
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+/* 取消按钮：深色透明底 + 浅描边 */
+.modal-btn-cancel {
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, .45);
+    color: #cbd5e1;
+    min-width: 110px;
+}
+.modal-btn-cancel:hover {
+    border-color: rgba(148, 163, 184, .8);
+    background: rgba(148, 163, 184, .12);
+}
+
+/* 确认按钮：危险渐变红 + 光晕 */
+.modal-btn-ok {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    border: none;
+    color: #fff;
+    min-width: 110px;
+    box-shadow: 0 2px 12px rgba(239, 68, 68, .4);
+}
+.modal-btn-ok:hover {
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+    box-shadow: 0 4px 18px rgba(239, 68, 68, .55);
+}
+
+/* ---------- 「查看设备列表」弹窗（复用深色玻璃卡片，内容左对齐、更宽） ---------- */
+/* 覆盖 .modal-card 的居中窄卡样式：设备信息行需要更多横向空间 */
+.device-modal-card {
+    width: 660px;
+    max-width: calc(100vw - 48px);   /* 窗口过窄时不溢出 */
+    text-align: left;
+}
+
+/* 弹窗状态行：加载中 / 设备总数 / 错误原因 */
+.device-modal-status {
+    font-size: 12.5px;
+    color: #94a3b8;
+    line-height: 1.6;
+    word-break: break-all;
+    margin-bottom: 12px;
+}
+
+/* 设备列表容器：行数多时内部滚动，弹窗高度稳定不跳动 */
+.device-modal-list {
+    max-height: 320px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 18px;
+}
+
+/* 单行设备：状态灯 | 主信息(序列号+状态) | 连接方式徽标 | 属性 | 操作按钮 */
+.device-modal-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(148, 163, 184, .18);
+    border-radius: 10px;
+    background: rgba(148, 163, 184, .06);
+    transition: background .15s;
+}
+.device-modal-row:hover {
+    background: rgba(148, 163, 184, .12); /* 悬停高亮，便于对准行内按钮 */
+}
+
+/* 状态指示灯：绿=可用 / 灰=离线 / 黄=未授权或其他异常 */
+.device-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.device-dot-ok {
+    background: #22c55e;
+    box-shadow: 0 0 8px rgba(34, 197, 94, .8);   /* 绿灯光晕 */
+}
+.device-dot-off {
+    background: #64748b;
+}
+.device-dot-warn {
+    background: #f59e0b;
+    box-shadow: 0 0 8px rgba(245, 158, 11, .6);  /* 黄灯光晕 */
+}
+
+/* 主信息列（序列号 + 状态中文说明），占据剩余宽度 */
+.device-main {
+    flex: 1;
+    min-width: 0;                 /* 允许子元素截断省略 */
+}
+.device-serial {
+    font-family: Consolas, "Courier New", monospace; /* 序列号等宽更易读 */
+    font-size: 13px;
+    color: #f1f5f9;
+    word-break: break-all;
+    line-height: 1.4;
+}
+.device-state {
+    font-size: 11.5px;
+    color: #94a3b8;
+    line-height: 1.4;
+}
+
+/* 连接方式徽标（USB / TCP / 模拟器）：霓虹青小胶囊 */
+.device-transport {
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    flex-shrink: 0;
+    background: rgba(56, 189, 248, .14);
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, .32);
+    white-space: nowrap;
+}
+
+/* 属性列：型号 / 品牌 / 安卓版本 —— 两列网格实现"按 key 对齐" */
+/* 标签列（第 1 列）宽度自动等于最宽标签，值统一从第 2 列起点左对齐，
+   与各标签自身宽度无关；整块内容仍靠行尾（justify-content:end） */
+.device-info {
+    display: grid;
+    grid-template-columns: auto minmax(0, max-content);
+    justify-content: end;          /* 网格整体贴行尾，与连接方式徽标等对齐 */
+    align-content: center;
+    font-size: 12px;
+    color: #cbd5e1;
+    line-height: 1.55;
+    flex-shrink: 0;
+    max-width: 240px;
+}
+
+/* 属性行容器：不生成盒子，让内部的标签/值直接成为上面网格的单元格
+   （key 对齐的实现核心：标签们落在同一第 1 列、值们落在同一第 2 列） */
+.device-prop {
+    display: contents;
+}
+
+/* 属性标签（"型号："等）：暗灰弱化 + 右对齐，紧贴值列 */
+.device-prop-label {
+    color: #7c8ba1;
+    text-align: right;
+    padding-right: 4px;
+    white-space: nowrap;
+}
+
+/* 属性值：从值列起点左对齐（key 对齐的另一半），过长截断省略 */
+.device-prop-value {
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 行内操作按钮组 */
+.device-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
