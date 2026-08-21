@@ -12,6 +12,8 @@ export function ForceStop(arg1:string,arg2:string):Promise<string>;
 
 export function GetAdbStatus():Promise<string>;
 
+export function GetCmdCwd():Promise<string>;
+
 export function GetDevices():Promise<Array<adb.Device>>;
 
 export function GetDevicesDetail():Promise<Array<adb.DeviceDetail>>;
@@ -22,6 +24,8 @@ export function InstallAdbLocal(arg1:string):Promise<string>;
 
 export function InstallAdbOnline():Promise<string>;
 
+export function IsLiveLogRunning():Promise<boolean>;
+
 export function ListPackages(arg1:string,arg2:string,arg3:boolean):Promise<Array<string>>;
 
 export function Pull(arg1:string,arg2:string,arg3:string):Promise<string>;
@@ -29,6 +33,8 @@ export function Pull(arg1:string,arg2:string,arg3:string):Promise<string>;
 export function Push(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function RecheckAdb():Promise<string>;
+
+export function RunCmd(arg1:string):Promise<string>;
 
 export function Screenshot(arg1:string,arg2:string):Promise<string>;
 
@@ -40,7 +46,11 @@ export function SelectZipFile():Promise<string>;
 
 export function StartApp(arg1:string,arg2:string):Promise<string>;
 
+export function StartLiveLog(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function StartLogcat(arg1:string,arg2:string):Promise<string>;
+
+export function StopLiveLog():Promise<void>;
 
 export function StopLogcat():Promise<void>;
 

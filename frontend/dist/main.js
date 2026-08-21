@@ -8,7 +8,15 @@
              2. 「查看设备列表」弹窗展示完整信息（连接方式/状态/型号/安卓版本），
                 支持直接选为当前设备、断开 TCP 设备
              3. 应用查询结果渲染为列表，每行直接挂「启动 / 强停 / 清缓存 / 卸载」按钮
-             4. 日志抓取只有「开始 / 结束」两个动作 + 状态行，无实时终端
+             4. 日志相关三处入口：
+                a) 一键抓取（日志卡片）：「开始 / 结束」两个动作，自动落文件
+                b) 实时日志（底部面板模式之一，V1.8 迁入）：参考 Android Studio
+                   Logcat，级别过滤（后端 logcat 原生）+ 关键字过滤（前端即时）
+                   + 暂停/继续 + 滚动到最新（图标按钮，点亮=跟随）
+                c) 命令行（底部面板模式之一，V1.8 新增）：本机 cmd 终端，
+                   回车执行、↑↓ 翻历史、cd 持久化
+             5. 底部面板三模式互斥切换（操作反馈/命令行/实时日志），
+                清空按模式分发，收起为面板级折叠
              5. 所有操作反馈统一写入底部固定栏，带时间戳追加，始终可见
    ============================================================================ */
 
@@ -870,6 +878,539 @@ async function doStopLogcat() {
 }
 
 /* ---------------------------------------------------------------------------
+ * 实时日志（V1.6 引入，V1.8 迁移到底部面板的模式之一）
+ * 入口：底部面板「实时日志」模式按钮（旧版日志卡片上的开关已移除）。
+ * 日志经 "live-log-lines" 事件批量推送（后端 200ms/200行聚合）。
+ * 前端三级性能设计：
+ *   1. 缓冲数组环形上限 5000 行（超出丢最旧，内存恒定）
+ *   2. 暂停时不做任何 DOM 更新，仅入缓冲；恢复时全量补齐
+ *   3. 渲染用 DocumentFragment 批量插入 + rAF 合帧，避免逐行回流
+ * 交互细节（对齐 AS Logcat 习惯）：
+ *   - 级别过滤走后端（logcat 原生 filter，切换 = 重启会话）
+ *   - 关键字过滤走前端（即时，200ms 防抖全量重渲）
+ *   - 用户向上滚离底部自动停止跟随，滚回底部自动恢复
+ *   - 进入实时日志模式即强制开启"滚动到最新"（打开就看到最新打印流）
+ * ------------------------------------------------------------------------ */
+
+// 实时日志缓冲（最新在末尾）。上限环形：超出丢最旧
+let liveLogLines = [];
+
+// ---------- 上限与性能参数（V1.7 性能修复） ----------
+// 内存缓冲上限：供关键字过滤全量重建与暂停补齐用（数据层，不在 DOM 里）
+const LIVE_MAX_LINES = 5000;
+// DOM 展示上限：视图内最多保留的行数（原版 5000 行 DOM 是"打开即卡死"的
+// 根因之一——2.5 万节点全量布局；浏览器控制台同类方案也只保留约 1000 条）
+const LIVE_DOM_MAX = 1000;
+// DOM 裁剪滞回目标：超过 LIVE_DOM_MAX 时一次性砍到该值。
+// 滞回（1000→800）避免每批日志都触发 removeChild 来回抖动
+const LIVE_TRIM_TO = 800;
+// 单条消息 DOM 渲染截断阈值：超长日志（堆栈/大 JSON）整行渲染成几十视觉行，
+// 截断后只显示前 N 字符 + 提示（内存里保留全文，不影响过滤）
+const LIVE_MSG_MAX = 2000;
+
+// 关键字过滤缓存（原版每行过滤都读 input.value，高频批次下是纯浪费；
+// 输入事件时更新本变量，过滤函数只读变量）
+let liveKeyword = "";
+
+// 暂停标记：true = 后台继续接收进缓冲，但不渲染界面
+let livePaused = false;
+
+// 自动滚动跟随标记（与「自动滚动」勾选框、滚动位置双向同步）
+let liveFollow = true;
+
+// rAF 合帧渲染状态：待渲染行暂存 + 是否已排帧。
+// 多批日志在两帧之间到达时合并为一次 DOM 更新（渲染频率 ≤ 帧率）
+let liveRenderPending = null;
+let liveRafScheduled = false;
+
+// 包名过滤当前值（输入框回车时更新并重启会话；V1.9，参考 AS package 过滤）
+let livePkg = "";
+
+// 更新实时日志工具栏右侧的状态文字
+function setLiveStatus(text) {
+    $("live-status").textContent = text;
+}
+
+// 判断一行日志是否通过当前关键字过滤（匹配 Tag 或正文，不区分大小写）。
+// 只读缓存的 liveKeyword 变量——每行都去查 input.value 是高频批次的隐性开销
+function liveLineMatches(line) {
+    if (!liveKeyword) {
+        return true; // 无关键字：全部通过
+    }
+    const tag = (line.tag || "").toLowerCase();
+    const msg = (line.message || "").toLowerCase();
+    return tag.indexOf(liveKeyword) >= 0 || msg.indexOf(liveKeyword) >= 0;
+}
+
+// 构造单条日志行的 DOM 元素（时间 / 级别徽标 / Tag(PID) / 正文）。
+// 级别 class（log-v ~ log-f、log-q 无级别）在 CSS 中按 AS 配色定义
+function buildLogLineEl(line) {
+    const row = document.createElement("div");
+    // 级别 class：V/D/I/W/E/F → log-v ~ log-f；
+    // 空级别与后端的 "?"（非标准行，如 "--------- beginning of main"）
+    // 统一映射 log-q 暗灰样式（直接拼会得到未定义的 "log-?"，压测发现的真 bug）
+    const lv = (line.level && line.level !== "?") ? line.level.toLowerCase() : "q";
+    row.className = "log-line log-" + lv;
+
+    // 时间戳（弱化灰色）
+    const timeEl = document.createElement("span");
+    timeEl.className = "log-time";
+    timeEl.textContent = line.time || "";
+    row.appendChild(timeEl);
+
+    // 级别徽标（单字符，着色由级别 class 控制）；无级别行显示 "·" 而不是 "?"
+    const lvEl = document.createElement("span");
+    lvEl.className = "log-level";
+    lvEl.textContent = (line.level && line.level !== "?") ? line.level : "·";
+    row.appendChild(lvEl);
+
+    // Tag（浅蓝色，带 PID；长 Tag 截断，悬停可见全名）
+    const tagEl = document.createElement("span");
+    tagEl.className = "log-tag";
+    const tagText = line.tag ? line.tag + (line.pid ? "(" + line.pid + ")" : "") : "";
+    tagEl.textContent = tagText;
+    tagEl.title = tagText;
+    row.appendChild(tagEl);
+
+    // 正文（可换行，着色由级别 class 控制）。
+    // 超长消息截断：整行渲染几十视觉行是布局灾难（配合 content-visibility
+    // 仍在视口内时昂贵）；截断只影响展示，过滤仍用内存中的全文
+    const msgEl = document.createElement("span");
+    msgEl.className = "log-msg";
+    const fullMsg = line.message || "";
+    if (fullMsg.length > LIVE_MSG_MAX) {
+        msgEl.textContent = fullMsg.slice(0, LIVE_MSG_MAX)
+            + " …（已截断，完整长度 " + fullMsg.length + " 字符）";
+    } else {
+        msgEl.textContent = fullMsg;
+    }
+    row.appendChild(msgEl);
+
+    return row;
+}
+
+// 同步「滚动到最新」按钮的点亮/熄灭状态（视觉即功能状态）
+function setLiveFollowButton(active) {
+    const btn = $("btn-live-follow");
+    if (btn) {
+        btn.classList.toggle("live-follow-active", active);
+    }
+}
+
+// 把日志视图滚到真正的最底部。
+// 双保险策略（V1.8）：先 scrollTop 赋超大值交给浏览器钳制（免读 scrollHeight），
+// 再对最后一行 scrollIntoView —— content-visibility 的视口外行高度是估算值，
+// 纯 scrollTop 钳制可能停在"估算最大"而非真实底部；scrollIntoView 强制
+// 定位到最后一行真实位置，保证打开实时日志即刻看到最新打印流
+function scrollLiveToBottom() {
+    const view = $("live-log-view");
+    view.scrollTop = 1e9;
+    if (view.lastElementChild) {
+        view.lastElementChild.scrollIntoView({ block: "end" });
+    }
+}
+
+// 全量重建日志视图（清空 / 关键字变化 / 暂停恢复时使用）。
+// 只重建缓冲中"最新的 LIVE_DOM_MAX 行"（DOM 上限与增量渲染保持一致——
+// 重建出 5000 行再立刻裁掉 4000 行毫无意义），一次性 Fragment 追加
+function renderLiveLogFull() {
+    // 全量重建意味着 pending 队列作废（缓冲已包含其全部内容），
+    // 不清会导致下一帧把已重建过的行重复追加（脏数据闪回）
+    liveRenderPending = null;
+    const view = $("live-log-view");
+    const start = Math.max(0, liveLogLines.length - LIVE_DOM_MAX);
+    const frag = document.createDocumentFragment();
+    for (let i = start; i < liveLogLines.length; i++) {
+        if (liveLineMatches(liveLogLines[i])) {
+            frag.appendChild(buildLogLineEl(liveLogLines[i]));
+        }
+    }
+    view.innerHTML = "";
+    view.appendChild(frag);
+    if (liveFollow) {
+        scrollLiveToBottom();
+    }
+}
+
+// 裁剪视图头部多余的 DOM 行（滞回批量：超过 LIVE_DOM_MAX 一次砍到 LIVE_TRIM_TO）。
+// 原版逐行 while + removeChild 且上限 5000，高频批次下每批都在删行；
+// 滞回后 200 行才触发一次批量删除，删除量固定 200，开销恒定
+function trimLiveDom() {
+    const view = $("live-log-view");
+    const n = view.children.length;
+    if (n <= LIVE_DOM_MAX) {
+        return;
+    }
+    const removeCount = n - LIVE_TRIM_TO;
+    for (let i = 0; i < removeCount; i++) {
+        view.removeChild(view.firstChild);
+    }
+}
+
+// 接收一批日志（后端 "live-log-lines" 事件，lines 为结构化数组）。
+// V1.7 性能修复后的处理链：
+//   1. 全量入内存缓冲（环形 5000）—— 数据永不因渲染策略丢行
+//   2. 暂停中：完全不碰 DOM，仅更新计数
+//   3. 运行中：过滤通过的行先积攒到 liveRenderPending，
+//      由 requestAnimationFrame 在下一帧统一渲染（合帧）——
+//      两帧之间到达的多批日志合并为一次 DOM 更新，
+//      渲染频率被钳制在帧率内，事件再密集也不会连续布局打满主线程
+function onLiveLines(lines) {
+    if (!Array.isArray(lines) || lines.length === 0) {
+        return;
+    }
+    // 逐行入缓冲（不用 push(...lines) 展开，避免超大数组调用栈风险）
+    for (let i = 0; i < lines.length; i++) {
+        liveLogLines.push(lines[i]);
+    }
+    // 缓冲环形裁剪：超出上限丢最旧（splice 一次移除，避免循环 shift 低效）
+    if (liveLogLines.length > LIVE_MAX_LINES) {
+        liveLogLines.splice(0, liveLogLines.length - LIVE_MAX_LINES);
+    }
+
+    // 暂停中：不碰 DOM，仅更新状态计数（恢复时全量补齐）
+    if (livePaused) {
+        setLiveStatus("已暂停 · 缓冲 " + liveLogLines.length + " 行");
+        return;
+    }
+
+    // 过滤通过的行进入待渲染队列（合帧）
+    if (!liveRenderPending) {
+        liveRenderPending = [];
+    }
+    for (let i = 0; i < lines.length; i++) {
+        if (liveLineMatches(lines[i])) {
+            liveRenderPending.push(lines[i]);
+        }
+    }
+    scheduleLiveRender();
+}
+
+// 安排下一帧渲染（同一帧内多次到达只排一次）
+function scheduleLiveRender() {
+    if (liveRafScheduled) {
+        return;
+    }
+    liveRafScheduled = true;
+    requestAnimationFrame(flushLiveRender);
+}
+
+// 帧回调：把积攒的待渲染行一次性追加进视图。
+// DOM 操作集中在一帧内：Fragment 批量构建 → 一次 appendChild →
+// 滞回裁剪 → scrollTop 直接赋超大值（免读 scrollHeight 的强制布局）
+function flushLiveRender() {
+    liveRafScheduled = false;
+    const pending = liveRenderPending;
+    liveRenderPending = null;
+    if (!pending || pending.length === 0) {
+        return;
+    }
+
+    const view = $("live-log-view");
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < pending.length; i++) {
+        frag.appendChild(buildLogLineEl(pending[i]));
+    }
+    view.appendChild(frag);
+    trimLiveDom();
+    if (liveFollow) {
+        scrollLiveToBottom(); // scrollTop 钳制 + 最后一行 scrollIntoView 双保险
+    }
+    setLiveStatus(liveStatusRunning());
+}
+
+// 会话结束处理（后端 "live-log-ended" 事件：用户停止 / 设备断开 / adb 退出）。
+// 不强制切走模式：保留 live 视图与已收到的日志供回看，
+// 状态行明示结束原因；再次进入实时日志模式会重新启动会话
+function onLiveEnded(ev) {
+    const reason = ev && ev.reason ? ev.reason : "未知原因";
+    setLiveStatus("已结束：" + reason + "（内容可回看，重进此模式重新开始）");
+    // 仅在实时日志模式可见时提示（切走模式触发的停止不再刷反馈）
+    if (panelMode === "live") {
+        pushOutput("ℹ️ 实时日志已结束：" + reason + "（面板内容仍可回看）");
+    }
+}
+
+// 启动实时日志会话（进入实时日志模式 / 切级别 / 改包名过滤 复用同一入口）。
+// 每次启动都强制开启"滚动到最新"——打开即看到最新打印流（V1.8 需求），
+// 不继承上次翻看历史时留下的熄灭状态。
+// 包名过滤（V1.9，参考 Android Studio 的 package 过滤）：后端把包名解析成
+// pid 后以 --pid 过滤，只看该应用的日志；应用未运行会返回友好错误
+async function startLiveSession() {
+    const serial = requireDevice();
+    if (!serial) {
+        return false; // 无设备：由调用方负责退回操作反馈模式
+    }
+
+    // 复位会话状态：清缓冲、清待渲染队列、清视图、解除暂停、强制跟随最新
+    liveLogLines = [];
+    liveRenderPending = null;
+    livePaused = false;
+    liveFollow = true;
+    setLiveFollowButton(true);
+    $("live-log-view").innerHTML = "";
+    $("btn-live-pause").textContent = "暂停";
+    setLiveStatus("启动中…");
+
+    const level = $("live-level").value;
+    const pkg = livePkg.trim(); // 包名过滤（空 = 不过滤全部日志）
+    const res = await run(window.go.main.App.StartLiveLog(serial, level, pkg));
+    if (!res.ok) {
+        setLiveStatus("启动失败");
+        pushOutput("❌ 实时日志启动失败：" + res.err);
+        return false;
+    }
+    // 状态行带上包名过滤标记，让过滤生效与否一目了然
+    setLiveStatus(pkg ? "运行中 · 包 " + pkg + " · 0 行" : "运行中 · 0 行");
+    pushOutput("✅ 实时日志已开始（设备 " + serial + "，最低级别 " + level
+        + (pkg ? "，包名过滤 " + pkg : "") + "）");
+    return true;
+}
+
+// 停止实时日志会话（切出实时日志模式时调用；幂等）
+async function stopLiveSession() {
+    await window.go.main.App.StopLiveLog();
+    setLiveStatus("未启动");
+}
+
+// 运行中状态行的统一文案（带包名过滤标记）
+function liveStatusRunning() {
+    return livePkg.trim()
+        ? "运行中 · 包 " + livePkg.trim() + " · " + liveLogLines.length + " 行"
+        : "运行中 · 已接收 " + liveLogLines.length + " 行";
+}
+
+// 级别下拉切换：后端 logcat 原生过滤需重启会话生效（后端先停旧会话，幂等）。
+// 缓冲清空（新级别下旧行语义不一致），保持当前模式
+async function onLiveLevelChange() {
+    if (panelMode !== "live") {
+        return; // 不在实时日志模式：仅记住选择，下次进入生效
+    }
+    const level = $("live-level").value;
+    // 复用统一启动入口（内部含清缓冲/复位状态/带包名过滤）
+    const ok = await startLiveSession();
+    if (ok) {
+        pushOutput("ℹ️ 实时日志级别已切换为 " + level + "（日志已重新开始）");
+    }
+}
+
+// 包名过滤应用（输入框回车触发，V1.9）：
+// 非空 = 只看该应用日志（后端解析 pid 过滤）；清空回车 = 取消过滤恢复全量。
+// 应用未运行时后端返回友好错误，会话保持停止——修正输入或清空后重试
+async function onLivePkgApply() {
+    if (panelMode !== "live") {
+        livePkg = $("live-pkg").value; // 不在实时日志模式：记住输入，下次进入生效
+        return;
+    }
+    livePkg = $("live-pkg").value;
+    const ok = await startLiveSession();
+    if (ok) {
+        pushOutput(livePkg.trim()
+            ? "ℹ️ 实时日志已按包名过滤：" + livePkg.trim() + "（仅显示该应用日志）"
+            : "ℹ️ 实时日志包名过滤已取消（恢复全量日志）");
+    }
+}
+
+// 暂停 / 继续：暂停时后台继续缓冲不渲染；继续时全量补齐展示
+function onLivePauseToggle() {
+    livePaused = !livePaused;
+    $("btn-live-pause").textContent = livePaused ? "继续" : "暂停";
+    if (!livePaused) {
+        renderLiveLogFull(); // 恢复：把暂停期间缓冲的内容全部补上
+    }
+}
+
+// 清空：缓冲、待渲染队列与视图一起清（会话继续运行，后续日志继续追加）
+function onLiveClear() {
+    liveLogLines = [];
+    liveRenderPending = null; // 不清会被下一帧 rAF 把待渲染行重新加回来
+    $("live-log-view").innerHTML = "";
+    setLiveStatus(livePaused ? "已暂停 · 0 行" : "运行中 · 0 行");
+}
+
+/* ---------------------------------------------------------------------------
+ * 底部面板三模式（V1.8：操作反馈 / 命令行 / 实时日志）
+ * 面板标题左侧分段按钮互斥切换；「清空」按当前模式清对应内容；
+ * 「收起」为面板级折叠不受模式影响。
+ * 排他规则（用户需求）：选择操作反馈或命令行时，实时日志会话自动停止；
+ * 操作反馈数据始终后台积累（切回即可见），命令行输出与历史保留。
+ * ------------------------------------------------------------------------ */
+
+// 当前面板模式：feedback（操作反馈，默认）/ cmd（命令行）/ live（实时日志）
+let panelMode = "feedback";
+
+// 面板模式切换主入口（分段按钮点击调用）。
+// 切出 live 停会话；切入 live 需要设备（无设备提示并退回 feedback）；
+// 切入 cmd 聚焦输入框（立即可以敲命令）
+async function setPanelMode(mode) {
+    if (mode === panelMode) {
+        return; // 重复点击同一模式：无操作
+    }
+
+    // 离开实时日志模式：停止会话（缓冲与视图保留，重进时重新开始）
+    if (panelMode === "live" && mode !== "live") {
+        await stopLiveSession();
+        pushOutput("ℹ️ 实时日志已停止（切换到"
+            + (mode === "cmd" ? "命令行" : "操作反馈") + "模式）。");
+    }
+
+    panelMode = mode;
+
+    // ---- 分段按钮高亮 & 内容区互斥显示 ----
+    document.querySelectorAll("#panel-mode-switch .mode-btn").forEach(function (btn) {
+        btn.classList.toggle("mode-btn-active", btn.dataset.mode === mode);
+    });
+    $("cmd-output").style.display = mode === "feedback" ? "block" : "none";
+    $("cmd-terminal").style.display = mode === "cmd" ? "flex" : "none";
+    $("live-log-panel").style.display = mode === "live" ? "flex" : "none";
+
+    // ---- 进入模式的联动 ----
+    if (mode === "cmd") {
+        // 命令行：需要大窗口 → 默认档时自动升到最大；刷新提示符并聚焦输入框
+        autoExpandPanelForMode();
+        await updateTermPrompt();
+        $("cmd-term-input").focus();
+    } else if (mode === "live") {
+        // 实时日志：需要大窗口 → 默认档时自动升到最大；
+        // 需要设备；无设备退回操作反馈模式
+        autoExpandPanelForMode();
+        const serial = $("device-select").value;
+        if (!serial) {
+            pushOutput("⚠️ 实时日志需要先在「设备连接」中选择一台设备。");
+            await setPanelMode("feedback");
+            return;
+        }
+        const ok = await startLiveSession();
+        if (!ok) {
+            await setPanelMode("feedback"); // 启动失败（含无设备）：退回
+            return;
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * 命令行模式（本机 cmd 终端）
+ * 行为对齐真实终端：回显输入命令 → 输出结果；cd 持久化（后端会话目录）；
+ * ↑/↓ 翻命令历史。输出上限 200 条防无限增长。
+ * ------------------------------------------------------------------------ */
+
+// 命令行输出历史（含回显行与结果行，最新在末尾），上限环形
+let cmdTermLines = [];
+const CMD_TERM_MAX_LINES = 200;
+
+// 命令历史（仅用户输入过的命令）与浏览位置（↑↓ 翻历史用）
+let cmdHistory = [];
+const CMD_HISTORY_MAX = 50;
+let cmdHistIdx = -1; // -1 = 不在历史浏览态（正在输入新命令）
+
+// 追加一行到命令行输出并渲染（自动滚到底部）
+function appendCmdTermLine(text) {
+    cmdTermLines.push(text);
+    if (cmdTermLines.length > CMD_TERM_MAX_LINES) {
+        cmdTermLines.shift(); // 环形丢弃最旧
+    }
+    const out = $("cmd-term-out");
+    out.textContent = cmdTermLines.join("\n");
+    out.scrollTop = out.scrollHeight; // 命令行输出量小，直接滚底即可
+}
+
+// 更新命令提示符（显示后端会话的当前目录，形如 "C:\path>"）
+async function updateTermPrompt() {
+    const res = await run(window.go.main.App.GetCmdCwd());
+    if (res.ok && res.result) {
+        $("cmd-term-prompt").textContent = res.result + ">";
+    }
+}
+
+// 执行一条命令：回显 → 调后端 RunCmd → 输出结果 → 刷新提示符（cd 可能改目录）
+async function execCmdTerm(command) {
+    const trimmed = command.trim();
+    if (!trimmed) {
+        return; // 空命令不执行（也不进历史）
+    }
+
+    // 进历史（去重：与上一条相同则不重复记录）
+    if (cmdHistory[cmdHistory.length - 1] !== trimmed) {
+        cmdHistory.push(trimmed);
+        if (cmdHistory.length > CMD_HISTORY_MAX) {
+            cmdHistory.shift();
+        }
+    }
+    cmdHistIdx = -1; // 退出历史浏览态
+
+    // 回显：提示符 + 命令（与真实终端一致）
+    appendCmdTermLine($("cmd-term-prompt").textContent + " " + trimmed);
+
+    const res = await run(window.go.main.App.RunCmd(trimmed));
+    if (!res.ok) {
+        appendCmdTermLine("❌ 命令启动失败：" + res.err);
+        return;
+    }
+    // 输出（可能为空，如 cd 成功只回显新目录）
+    if (res.result) {
+        appendCmdTermLine(res.result.replace(/\r\n$/, ""));
+    }
+    // cd 可能改变了会话目录：刷新提示符
+    await updateTermPrompt();
+}
+
+// 命令输入框按键处理：Enter 执行并清空输入；↑/↓ 翻历史
+async function onCmdInputKey(e) {
+    const input = $("cmd-term-input");
+    if (e.key === "Enter") {
+        const command = input.value;
+        input.value = "";
+        await execCmdTerm(command);
+        return; // 执行完保持焦点，继续敲下一条
+    }
+    if (e.key === "ArrowUp") {
+        // 向上翻更早的历史；无历史则忽略
+        if (cmdHistory.length === 0) {
+            return;
+        }
+        if (cmdHistIdx === -1) {
+            cmdHistIdx = cmdHistory.length - 1; // 从最新一条开始
+        } else if (cmdHistIdx > 0) {
+            cmdHistIdx--;
+        }
+        input.value = cmdHistory[cmdHistIdx];
+        e.preventDefault();
+        return;
+    }
+    if (e.key === "ArrowDown") {
+        // 向下翻更近的历史；翻到底退出浏览态（清空输入）
+        if (cmdHistIdx === -1) {
+            return;
+        }
+        if (cmdHistIdx < cmdHistory.length - 1) {
+            cmdHistIdx++;
+            input.value = cmdHistory[cmdHistIdx];
+        } else {
+            cmdHistIdx = -1;
+            input.value = "";
+        }
+        e.preventDefault();
+    }
+}
+
+// 清空命令行输出（命令历史保留——清屏不清历史，与终端习惯一致）
+function clearCmdTerm() {
+    cmdTermLines = [];
+    $("cmd-term-out").textContent = "";
+}
+
+// 「清空」按钮按当前模式分发（操作反馈 / 命令行输出 / 实时日志）
+function onClearCurrentMode() {
+    if (panelMode === "feedback") {
+        clearOutput();
+    } else if (panelMode === "cmd") {
+        clearCmdTerm();
+    } else {
+        onLiveClear();
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * ADB 环境准备向导（三步：检测 → 安装 → 完成）
  * 每一步都由用户点击按钮显式推进，不自动跳过，
  * 确保用户清楚看到每一步的成功/失败结果。
@@ -1048,7 +1589,16 @@ async function resetDeviceDependentUI() {
     await window.go.main.App.StopLogcat();
     $("logcat-status").textContent = "当前状态：未抓取";
 
-    // 2. 清空应用列表、过滤条件与查询范围勾选（应用列表属于旧设备的数据）
+    // 2. 停止实时日志：若正处于实时日志模式则退回操作反馈模式
+    //    （setPanelMode 内部会停会话并复位界面；其他模式下会话本就未运行，
+    //     显式停一次做兜底——幂等无害）
+    if (panelMode === "live") {
+        await setPanelMode("feedback");
+    } else {
+        await window.go.main.App.StopLiveLog();
+    }
+
+    // 3. 清空应用列表、过滤条件与查询范围勾选（应用列表属于旧设备的数据）
     $("app-list").innerHTML = "";
     $("app-list-status").textContent = "尚未查询。选择设备后点击「查询应用」。";
     $("pkg-filter").value = "";
@@ -1069,32 +1619,56 @@ async function onDeviceChanged() {
 }
 
 /* ---------------------------------------------------------------------------
- * 底部操作反馈面板（VS Code 终端面板模式）
- * 1. 面板固定高度，文本在面板内部滚动 —— 无论反馈积累多少条，
- *    都不会挤压上方功能区（此前"面板被撑高、功能区被压扁"问题的根治方案）
- * 2. 顶部把手可拖拽调整面板高度（限制在 70~480px）
- * 3. 标题栏「收起/展开」按钮可一键折叠为标题条
+ * 底部面板高度管理（V1.9 重设计）
+ * 命令行和实时日志需要大窗口才有意义（用户反馈），新交互：
+ *   1. 「展开最大」：一键升到最大高度（480px，约半屏——沿用既有上限）
+ *   2. 「收起」：从最大恢复默认高度（180px），不再是折叠成标题条
+ *   3. 切换到命令行/实时日志模式时，若面板还在默认高度则自动升到最大；
+ *      用户手动拖拽过（>默认高度）则尊重用户尺寸不自动改
+ *   4. 拖拽把手仍可自由调整（70~480px），按钮文案随当前高度联动
  * ------------------------------------------------------------------------ */
 
-// 收起状态标记（收起时忽略拖拽调高）
-let outputCollapsed = false;
+// 面板高度档位：默认（收起目标）与最大（展开目标）
+const OUTPUT_DEFAULT_HEIGHT = 180;
+const OUTPUT_MAX_HEIGHT = 480;
+
+// 读取面板当前像素高度（未设置过时取默认值）
+function outputPanelHeight() {
+    const h = parseFloat($("output-panel").style.height);
+    return isNaN(h) ? OUTPUT_DEFAULT_HEIGHT : h;
+}
+
+// 更新「展开/收起」按钮文案（高度接近最大 → 显示"收起"，否则显示"展开最大"）
+function refreshOutputToggleText() {
+    const nearMax = outputPanelHeight() >= OUTPUT_MAX_HEIGHT - 20;
+    $("btn-toggle-output").textContent = nearMax ? "收起 ▾" : "展开最大 ▴";
+}
+
+// 切到命令行/实时日志模式时的自动增高：
+// 仅当面板还处于默认档（≤默认高度+20）时才升到最大——
+// 用户手动拖到过别的尺寸则不动，尊重用户选择
+function autoExpandPanelForMode() {
+    if (outputPanelHeight() <= OUTPUT_DEFAULT_HEIGHT + 20) {
+        $("output-panel").style.height = OUTPUT_MAX_HEIGHT + "px";
+    }
+    refreshOutputToggleText();
+}
 
 function initOutputPanel() {
-    // ---- 一键收起 / 展开 ----
+    const panel = $("output-panel");
+
+    // ---- 展开最大 / 收起（两档切换）----
     $("btn-toggle-output").addEventListener("click", function () {
-        outputCollapsed = !outputCollapsed;
-        $("output-panel").classList.toggle("collapsed", outputCollapsed);
-        this.textContent = outputCollapsed ? "展开 ▴" : "收起 ▾";
+        const nearMax = outputPanelHeight() >= OUTPUT_MAX_HEIGHT - 20;
+        // 当前接近最大 → 收回到默认档；否则（默认/拖小的尺寸）→ 升到最大
+        panel.style.height = (nearMax ? OUTPUT_DEFAULT_HEIGHT : OUTPUT_MAX_HEIGHT) + "px";
+        refreshOutputToggleText();
     });
 
-    // ---- 拖拽把手调整高度 ----
-    const panel = $("output-panel");
+    // ---- 拖拽把手调整高度（拖完同步按钮文案）----
     let dragging = false;
 
     $("output-resize").addEventListener("mousedown", function (e) {
-        if (outputCollapsed) {
-            return; // 收起状态下不允许拖拽
-        }
         dragging = true;
         e.preventDefault(); // 防止拖拽时选中文本
     });
@@ -1105,13 +1679,18 @@ function initOutputPanel() {
         }
         // 面板贴着窗口底部：高度 = 窗口高度 - 鼠标Y - 底部留白(12px padding)
         const h = window.innerHeight - e.clientY - 12;
-        // 限制高度范围：最小 70（只剩标题+一行），最大 480（不超过半屏）
-        panel.style.height = Math.max(70, Math.min(480, h)) + "px";
+        // 限制高度范围：最小 70（只剩标题+一行），最大 480（约半屏）
+        panel.style.height = Math.max(70, Math.min(OUTPUT_MAX_HEIGHT, h)) + "px";
     });
 
     window.addEventListener("mouseup", function () {
-        dragging = false;
+        if (dragging) {
+            dragging = false;
+            refreshOutputToggleText(); // 拖拽结束按新高度刷新按钮文案
+        }
     });
+
+    refreshOutputToggleText(); // 初始文案
 }
 
 /* ---------------------------------------------------------------------------
@@ -1168,8 +1747,64 @@ function init() {
     $("btn-start-logcat").addEventListener("click", doStartLogcat);
     $("btn-stop-logcat").addEventListener("click", doStopLogcat);
 
+    // ---- 底部面板三模式（V1.8）----
+    // 模式切换分段按钮：事件委托统一分发（data-mode 携带目标模式）
+    $("panel-mode-switch").addEventListener("click", function (e) {
+        const mode = e.target.dataset.mode;
+        if (mode) {
+            setPanelMode(mode);
+        }
+    });
+    // 命令行输入框：Enter 执行 / ↑↓ 翻历史
+    $("cmd-term-input").addEventListener("keydown", onCmdInputKey);
+
+    // ---- 实时日志（面板模式之一）----
+    // 级别切换：重启实时会话（logcat 原生过滤在设备端生效）
+    $("live-level").addEventListener("change", onLiveLevelChange);
+    // 包名过滤：回车应用/取消（后端解析 pid 过滤，参考 AS 的 package 过滤）
+    $("live-pkg").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+            onLivePkgApply();
+            e.preventDefault();
+        }
+    });
+    // 暂停/继续：暂停界面刷新（后台继续缓冲），继续时全量补齐
+    $("btn-live-pause").addEventListener("click", onLivePauseToggle);
+    // 清空（工具栏内，位于暂停与滚动到最新之间——V1.9 调整）
+    $("btn-live-clear").addEventListener("click", onLiveClear);
+    // 「滚动到最新」图标按钮：点击切换跟随状态（点亮=自动跟随最新一行）
+    $("btn-live-follow").addEventListener("click", function () {
+        liveFollow = !liveFollow;
+        setLiveFollowButton(liveFollow);
+        if (liveFollow) {
+            scrollLiveToBottom();
+        }
+    });
+    // 关键字过滤：输入即更新缓存变量（增量过滤用），
+    // 全量重渲 200ms 防抖（避免每敲一个字重建上千行 DOM）
+    let liveKeywordTimer = null;
+    $("live-keyword").addEventListener("input", function () {
+        liveKeyword = this.value.trim().toLowerCase(); // 同步缓存，下一批过滤即生效
+        clearTimeout(liveKeywordTimer);
+        liveKeywordTimer = setTimeout(renderLiveLogFull, 200);
+    });
+    // 滚动位置与自动跟随联动（对齐 AS Logcat 习惯）：
+    // 用户向上滚离底部 → 自动停止跟随（按钮熄灭）；滚回底部 → 自动恢复（点亮）
+    $("live-log-view").addEventListener("scroll", function () {
+        const atBottom = this.scrollHeight - this.scrollTop - this.clientHeight < 40;
+        if (atBottom !== liveFollow) {
+            liveFollow = atBottom;
+            setLiveFollowButton(atBottom); // 按钮状态即跟随状态，一眼可辨
+        }
+    });
+    // 订阅实时日志批量推送事件（Go 侧 200ms/200 行聚合后发出）
+    window.runtime.EventsOn("live-log-lines", onLiveLines);
+    // 订阅会话结束事件（用户停止 / 设备断开 / adb 退出）
+    window.runtime.EventsOn("live-log-ended", onLiveEnded);
+
     // ---- 操作反馈栏（固定高度面板：收起/展开/拖拽调高） ----
-    $("btn-clear-output").addEventListener("click", clearOutput);
+    // 清空按钮按当前模式分发（操作反馈 / 命令行输出 / 实时日志）
+    $("btn-clear-output").addEventListener("click", onClearCurrentMode);
     initOutputPanel();
 
     // ---- ADB 环境准备向导 ----

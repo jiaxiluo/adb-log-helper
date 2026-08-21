@@ -702,3 +702,326 @@ body {
     gap: 6px;
     flex-shrink: 0;
 }
+
+/* ---------- 实时日志面板（2026-08-21 V1.6，参考 Android Studio Logcat） ---------- */
+/* 开关关闭时整个面板 display:none，完全不占布局空间；
+   打开后在「日志抓取」卡片内部展开：上方工具栏 + 下方深色日志视图 */
+
+/* 卡片标题右侧容器：让提示文字与「实时日志」开关并排 */
+.card-title-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* 实时日志开关：稍微放大点击区并加色，让开关可被发现 */
+.live-toggle {
+    font-weight: 600;
+    color: var(--text);
+}
+.live-toggle input {
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+}
+
+/* 面板主体：纵向 flex，工具栏固定高度，日志视图占满剩余空间。
+   V1.8 迁移到底部面板后不再自带固定高度（高度由面板拖拽把手控制，
+   尺寸规则见文件末尾的迁移适配块），此处仅保留视觉样式 */
+.live-log-panel {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;              /* 圆角裁剪，内部滚动交给日志视图 */
+    background: #0f172a;           /* 深色终端底色（与操作反馈面板风格一致） */
+}
+
+/* 工具栏：浅色条与深色日志区形成分界，控件横向排列自动换行 */
+.live-log-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    background: #1e293b;
+    border-bottom: 1px solid #334155;
+    flex-shrink: 0;                /* 工具栏不被压缩 */
+}
+
+/* 级别下拉与关键字输入框：适配深色工具栏的浅色控件，紧凑尺寸 */
+.live-level-select {
+    width: auto;
+    max-width: 130px;
+    padding: 4px 6px;
+    font-size: 12px;
+}
+.live-keyword-input {
+    width: 190px;
+    padding: 4px 8px;
+    font-size: 12px;
+    background: #f8fafc;
+}
+
+/* 工具栏内的状态文字：浅色系（深底上可读） */
+.live-log-toolbar .hint {
+    color: #94a3b8;
+    margin-left: auto;             /* 状态文字推到最右侧 */
+    white-space: nowrap;
+}
+
+/* 日志视图：深色底 + 等宽字体，内部滚动（面板高度固定，内容无限追加） */
+.live-log-view {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 6px 8px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    color: #cbd5e1;                /* 默认正文色（浅灰蓝，深底可读） */
+}
+
+/* 单条日志行（V1.7 性能修复版）。
+   原版三大布局杀手（5000行时打开即卡死）：
+   1. word-break: break-all —— 逐字符断行,长日志行 wrap 成几十视觉行,布局成本爆炸
+      → 改用 overflow-wrap: anywhere（正常断词优先,仅超长 token 才断,便宜得多）
+   2. align-items: baseline —— flex 基线同步计算在多段 wrap 文本上非常昂贵
+      → 改为 flex-start（视觉几乎无差,省掉跨子元素基线测量）
+   3. 全部行参与布局/绘制,而视口只显示十几行
+      → content-visibility: auto：视口外的行跳过布局与绘制（Chromium 原生
+        支持虚拟化渲染,浏览器控制台同款手段）;contain-intrinsic-size 提供
+        视口外行的预估高度,保证滚动条高度与 scrollTop 计算稳定 */
+.log-line {
+    display: flex;
+    gap: 8px;
+    padding: 1px 4px;
+    align-items: flex-start;
+    overflow-wrap: anywhere;       /* 替代 break-all：正常断词优先,布局成本大幅降低 */
+    content-visibility: auto;      /* ★ 核心：视口外的行不布局不绘制 */
+    contain-intrinsic-size: auto 19px; /* 视口外行按单行高度预估（19px=12px字×1.55行距） */
+}
+.log-line:hover {
+    background: rgba(148, 163, 184, .08);
+}
+
+/* 行内三段：时间 / 级别徽标+Tag / 正文 */
+.log-time {
+    color: #64748b;                /* 时间戳弱化（深灰蓝） */
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+.log-tag {
+    color: #7dd3fc;                /* Tag 统一浅蓝色（参照 AS 的 tag 色） */
+    flex-shrink: 0;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;           /* 长 Tag 截断（悬停可见全名） */
+}
+.log-msg {
+    flex: 1;
+    min-width: 0;                  /* 允许正文换行收缩 */
+}
+
+/* 级别徽标：单字符 + 着色（与 Android Studio Logcat 配色一致） */
+.log-level {
+    display: inline-block;
+    width: 14px;
+    text-align: center;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.log-v .log-level { color: #94a3b8; }            /* Verbose：灰 */
+.log-d .log-level { color: #60a5fa; }            /* Debug：蓝 */
+.log-d .log-msg   { color: #93c5fd; }
+.log-i .log-level { color: #4ade80; }            /* Info：绿 */
+.log-i .log-msg   { color: #bbf7d0; }
+.log-w .log-level { color: #facc15; }            /* Warn：黄 */
+.log-w .log-msg   { color: #fde68a; }
+.log-w { background: rgba(250, 204, 21, .04); }  /* Warn 行加淡黄底，一眼定位 */
+/* 注：W/E/F 的整行背景在 content-visibility 下随行渲染,视口外无额外成本 */
+.log-e .log-level { color: #f87171; }            /* Error：红 */
+.log-e .log-msg   { color: #fca5a5; }
+.log-e { background: rgba(248, 113, 113, .07); } /* Error 行加淡红底 */
+.log-f .log-level { color: #ef4444; }            /* Fatal：深红加粗 */
+.log-f .log-msg   { color: #fca5a5; font-weight: 700; }
+.log-f { background: rgba(239, 68, 68, .12); }
+.log-q .log-level { color: #475569; }            /* 无级别行（beginning 等）：暗灰 */
+
+/* 滚动条美化：深色面板内的细滚动条（WebKit/WebView2） */
+.live-log-view::-webkit-scrollbar {
+    width: 8px;
+}
+.live-log-view::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 4px;
+}
+.live-log-view::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+}
+.live-log-view::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* ---------- 底部面板三模式（V1.8：操作反馈 / 命令行 / 实时日志） ---------- */
+
+/* 模式切换分段控件：嵌在面板标题左侧的按钮组（胶囊分段样式） */
+.panel-mode-switch {
+    display: inline-flex;
+    gap: 2px;
+    background: #e9edf3;
+    border-radius: 8px;
+    padding: 2px;
+}
+/* 单个模式按钮：默认灰字，激活时白底蓝字阴影 */
+.mode-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 5px 14px;
+    font-size: 13px;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .15s;
+}
+.mode-btn:hover {
+    color: var(--text);
+}
+.mode-btn-active {
+    background: #fff;
+    color: var(--primary);
+    font-weight: 600;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, .12);
+}
+
+/* ---------- 模式二：命令行终端 ---------- */
+/* 终端容器：占满面板剩余空间，深色背景与实时日志视图统一 */
+.cmd-terminal {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: #0f172a;
+    border-radius: 8px;
+    overflow: hidden;
+}
+/* 命令输出区：等宽字体内部滚动 */
+.cmd-term-out {
+    flex: 1;
+    min-height: 0;
+    margin: 0;
+    overflow-y: auto;
+    padding: 8px 10px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+/* 输入行：prompt + 输入框横排，深色底浅色字（终端质感） */
+.term-input-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #1e293b;
+    border-top: 1px solid #334155;
+    flex-shrink: 0;
+}
+/* prompt（当前目录>）：绿色系提示符，等宽字体 */
+.term-prompt {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    color: #4ade80;
+    white-space: nowrap;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+}
+/* 命令输入框：深色透明底、无框、浅色文字、聚焦亮边 */
+.term-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #e2e8f0;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    padding: 4px 6px;
+    outline: none;
+}
+.term-input:focus {
+    border-color: #475569;
+    background: rgba(15, 23, 42, .6);
+}
+
+/* ---------- 实时日志工具栏按钮（V1.8：深色底上的可见按钮） ---------- */
+/* 旧版复用 .btn/.btn-ghost：ghost 透明底+深色文字在深色工具栏上几乎不可见
+   （用户反馈"清空按钮看不到文字"），专用浅色实底样式替代 */
+.live-tool-btn {
+    padding: 4px 10px;
+    border: 1px solid #475569;
+    border-radius: 5px;
+    background: #f8fafc;
+    color: #1f2937;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .15s;
+    flex-shrink: 0;
+}
+.live-tool-btn:hover {
+    background: #e2e8f0;
+}
+.live-tool-btn:active {
+    transform: translateY(1px);
+}
+
+/* 「滚动到最新」图标切换按钮（替代旧版勾选框，一眼可辨）：
+   点亮（live-follow-active）= 蓝底白字 + 图标，表示正在自动跟随；
+   熄灭 = 灰底灰字，表示停在历史位置自由翻看 */
+.live-follow-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #cbd5e1;
+    color: #475569;
+    border-color: #94a3b8;
+}
+.live-follow-active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    box-shadow: 0 0 8px rgba(37, 99, 235, .5);
+}
+.live-follow-active:hover {
+    background: var(--primary-hover);
+}
+
+/* ---------- 实时日志面板在底部面板内的适配（V1.8 迁移） ---------- */
+/* 原版在日志卡片内自带固定高度 300px；迁移到底部面板后改为占满面板剩余空间，
+   高度由面板拖拽把手统一控制 */
+.live-log-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    margin-top: 0;                 /* 面板内不需要与上方内容留白 */
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0f172a;
+}
+
+/* ---------- V1.9：包名过滤输入框（实时日志工具栏，与关键字框同宽） ---------- */
+.live-pkg-input {
+    width: 200px;
+    padding: 4px 8px;
+    font-size: 12px;
+    background: #f8fafc;
+}

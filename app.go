@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"adb-log-helper/internal/adb"
+	"adb-log-helper/internal/cmdshell"
 )
 
 // App 是 Wails 应用的核心绑定结构体。
@@ -21,11 +22,15 @@ import (
 //   - adbPath:  adb 可执行文件绝对路径（启动时检测/安装得到）
 //   - session:  当前日志抓取会话（同一时间仅一个）
 //   - logCancel: 日志抓取会话的取消函数
+//   - liveSession: 当前实时日志会话（与 session 相互独立，互不影响）
+//   - cmdCwd:   命令行模式的会话工作目录（cd 持久化用，初始 = exe 目录）
 type App struct {
-	ctx       context.Context
-	adbPath   string
-	session   *adb.LogcatSession
-	logCancel context.CancelFunc
+	ctx         context.Context
+	adbPath     string
+	session     *adb.LogcatSession
+	logCancel   context.CancelFunc
+	liveSession *adb.LiveLogSession
+	cmdCwd      string
 }
 
 // NewApp 创建一个 App 实例。
@@ -46,6 +51,10 @@ func (a *App) startup(ctx context.Context) {
 	// 使日志目录、adb-tools 解压目录等相对路径保持一致。
 	if exePath, err := os.Executable(); err == nil {
 		_ = os.Chdir(filepath.Dir(exePath))
+		// 命令行模式的初始工作目录与程序目录一致（与双击 cmd 打开的位置相同）
+		if abs, err := filepath.Abs("."); err == nil {
+			a.cmdCwd = abs
+		}
 	}
 
 	// 启动时仅做检测，不再自动安装 ——
@@ -116,6 +125,7 @@ func (a *App) SelectZipFile() (string, error) {
 // shutdown 在应用关闭时被框架调用，负责清理日志抓取会话。
 func (a *App) shutdown(ctx context.Context) {
 	a.StopLogcat()
+	a.StopLiveLog() // 实时日志会话一并清理（幂等，未启动时调用无害）
 }
 
 // ensureAdb 检查 ADB 是否已就绪，未就绪时返回友好错误。
@@ -361,4 +371,110 @@ func (a *App) StopLogcat() {
 		a.session.Stop()
 		a.session = nil
 	}
+}
+
+// StartLiveLog 启动指定设备的实时日志推送（参考 Android Studio Logcat）。
+// 与一键抓取（StartLogcat 落文件）完全独立，两个会话可同时运行。
+// 日志行通过 Wails 事件 "live-log-lines" 批量推送给前端（每批为数组，
+// 后端已按 200ms/200 行聚合，前端直接整批渲染）；
+// 会话结束（停止/设备断开）时推送 "live-log-ended" 事件（携带原因）。
+// 入参:
+//   - serial:   目标设备序列号
+//   - minLevel: 最低日志级别（V/D/I/W/E/F；非法值按 V 全量处理）
+//   - pkg:      包名过滤（参考 AS 的 package: 过滤）。非空时先查该应用的
+//               进程号并以 --pid= 过滤——只看这个应用的日志；
+//               应用未运行时返回友好错误提示
+//
+// 返回: 启动失败错误
+func (a *App) StartLiveLog(serial, minLevel, pkg string) error {
+	if err := a.ensureAdb(); err != nil {
+		return err
+	}
+
+	// 若已有实时会话，先停止（切换设备/切换级别/改包名都会走到这里）
+	a.StopLiveLog()
+
+	// 包名过滤：先解析成 pid（logcat 不认识包名，AS 同样是 pid 方案）
+	pid := ""
+	if pkg != "" {
+		p, err := adb.PidOf(a.adbPath, serial, pkg)
+		if err != nil {
+			return err
+		}
+		if p == "" {
+			// 应用未运行：给出可操作的提示（AS 的 package:mine 同样要求进程活着）
+			return fmt.Errorf("包名 %s 当前没有运行中的进程，请先启动该应用（或清空包名过滤）", pkg)
+		}
+		pid = p
+	}
+
+	// 创建会话：批量行 → 事件推前端；结束 → 事件通知前端
+	session := adb.NewLiveLogSession(a.adbPath, serial, minLevel,
+		// 批量行回调：把一批结构化日志行推给前端渲染
+		func(lines []adb.LiveLogLine) {
+			runtime.EventsEmit(a.ctx, "live-log-lines", lines)
+		},
+		// 结束回调：把结束原因推给前端（用户主动停止/设备断开/adb 退出）
+		func(reason string) {
+			runtime.EventsEmit(a.ctx, "live-log-ended", map[string]interface{}{
+				"reason": reason,
+			})
+		},
+	)
+	session.Pid = pid // 非空时 logcat 附加 --pid=<pid>
+
+	if err := session.Start(); err != nil {
+		return err
+	}
+
+	a.liveSession = session
+	return nil
+}
+
+// StopLiveLog 停止当前实时日志会话（幂等，可重复调用）。
+// 前端关闭开关/切换设备/切换级别时调用
+func (a *App) StopLiveLog() {
+	if a.liveSession != nil {
+		a.liveSession.Stop()
+		a.liveSession = nil
+	}
+}
+
+// IsLiveLogRunning 返回实时日志会话是否正在运行。
+// 前端打开面板前检查，避免重复启动
+func (a *App) IsLiveLogRunning() bool {
+	return a.liveSession != nil && a.liveSession.Running()
+}
+
+// RunCmd 执行一条 Windows cmd 命令并返回输出（底部面板「命令行模式」入口）。
+// 会话级 cd 持久化：内部维护 cmdCwd，cd 命令更新它，其余命令在其下执行。
+// 命令的"业务失败"（非零退出码/找不到文件）不算 error——输出文本即结果；
+// error 仅表示命令无法启动（极少发生）。
+// 入参:
+//   - command: 用户输入的完整命令行（空命令直接返回空输出）
+//
+// 返回: 命令输出文本与错误
+func (a *App) RunCmd(command string) (string, error) {
+	if a.cmdCwd == "" {
+		// 兜底：startup 未走到（理论不可达）时用当前工作目录
+		if abs, err := filepath.Abs("."); err == nil {
+			a.cmdCwd = abs
+		}
+	}
+	output, newCwd, err := cmdshell.RunCommand(a.cmdCwd, command)
+	if err != nil {
+		return "", err
+	}
+	a.cmdCwd = newCwd // cd 成功时被 RunCommand 更新（失败时保持原值）
+	return output, nil
+}
+
+// GetCmdCwd 返回命令行模式的当前工作目录（前端显示提示符 "C:\path>" 用）
+func (a *App) GetCmdCwd() string {
+	if a.cmdCwd == "" {
+		if abs, err := filepath.Abs("."); err == nil {
+			a.cmdCwd = abs
+		}
+	}
+	return a.cmdCwd
 }

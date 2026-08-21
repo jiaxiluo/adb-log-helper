@@ -22,6 +22,10 @@ export function GetAdbStatus() {
   return window['go']['main']['App']['GetAdbStatus']();
 }
 
+export function GetCmdCwd() {
+  return window['go']['main']['App']['GetCmdCwd']();
+}
+
 export function GetDevices() {
   return window['go']['main']['App']['GetDevices']();
 }
@@ -42,6 +46,10 @@ export function InstallAdbOnline() {
   return window['go']['main']['App']['InstallAdbOnline']();
 }
 
+export function IsLiveLogRunning() {
+  return window['go']['main']['App']['IsLiveLogRunning']();
+}
+
 export function ListPackages(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListPackages'](arg1, arg2, arg3);
 }
@@ -56,6 +64,10 @@ export function Push(arg1, arg2, arg3) {
 
 export function RecheckAdb() {
   return window['go']['main']['App']['RecheckAdb']();
+}
+
+export function RunCmd(arg1) {
+  return window['go']['main']['App']['RunCmd'](arg1);
 }
 
 export function Screenshot(arg1, arg2) {
@@ -78,8 +90,16 @@ export function StartApp(arg1, arg2) {
   return window['go']['main']['App']['StartApp'](arg1, arg2);
 }
 
+export function StartLiveLog(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartLiveLog'](arg1, arg2, arg3);
+}
+
 export function StartLogcat(arg1, arg2) {
   return window['go']['main']['App']['StartLogcat'](arg1, arg2);
+}
+
+export function StopLiveLog() {
+  return window['go']['main']['App']['StopLiveLog']();
 }
 
 export function StopLogcat() {

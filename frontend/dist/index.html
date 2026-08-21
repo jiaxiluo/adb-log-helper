@@ -199,23 +199,88 @@
                 <!-- 抓取状态：未抓取 / 抓取中 + 日志文件路径 -->
                 <span id="logcat-status" class="hint">当前状态：未抓取</span>
             </div>
+            <!-- 实时日志入口已移至底部面板的模式切换（操作反馈 / 命令行 / 实时日志） -->
         </section>
     </div>
 
-    <!-- ==================== 底部固定：操作反馈（VS Code 终端面板模式） ==================== -->
-    <!-- 固定高度（文本在面板内滚动，永不挤压上方功能区）；
-         顶部拖拽条可调整高度；标题栏按钮可一键收起/展开 -->
+    <!-- ==================== 底部固定：三模式面板（V1.8 重构） ==================== -->
+    <!-- 固定高度（内容在面板内滚动，永不挤压上方功能区）；顶部拖拽条可调高度；
+         标题栏右侧清空（按当前模式清对应内容）与收起（全局折叠）。
+         三种模式互斥切换（分段按钮组）：
+           · 操作反馈 —— 旧版行为：追加展示平台操作反馈（默认模式）
+           · 命令行   —— 本机 cmd 终端：直接输入 Windows 命令，输出打在面板里
+           · 实时日志 —— 设备 logcat 实时流（级别/关键字/暂停/滚动到最新）
+         切到「操作反馈」或「命令行」时实时日志会话自动停止（排他使用面板） -->
     <section id="output-panel" class="card output-panel">
         <!-- 拖拽调高把手（位于面板顶部，上下箭头样式光标） -->
         <div id="output-resize" class="output-resize" title="拖拽调整高度"></div>
         <div class="card-title">
-            <h2>操作反馈</h2>
+            <!-- 模式切换分段控件：data-mode 对应三个内容区，JS 维护互斥显示 -->
+            <div id="panel-mode-switch" class="panel-mode-switch">
+                <button data-mode="feedback" class="mode-btn mode-btn-active">操作反馈</button>
+                <button data-mode="cmd" class="mode-btn">命令行</button>
+                <button data-mode="live" class="mode-btn">实时日志</button>
+            </div>
             <div class="output-title-btns">
                 <button id="btn-clear-output" class="btn btn-sm btn-ghost">清空</button>
                 <button id="btn-toggle-output" class="btn btn-sm btn-ghost">收起 ▾</button>
             </div>
         </div>
+
+        <!-- 模式一：操作反馈（旧版内容区原样保留；其他模式下数据照常积累，
+             切回即可见——反馈始终产生，只是不展示） -->
         <pre id="cmd-output" class="cmd-area"></pre>
+
+        <!-- 模式二：命令行（默认隐藏）。
+             输出区 + 输入行：prompt 显示当前目录，回车执行，↑↓ 翻命令历史 -->
+        <div id="cmd-terminal" class="cmd-terminal" style="display:none">
+            <pre id="cmd-term-out" class="cmd-term-out"></pre>
+            <div class="term-input-row">
+                <span id="cmd-term-prompt" class="term-prompt">C:\&gt;</span>
+                <input id="cmd-term-input" class="term-input" type="text"
+                       placeholder="输入 Windows 命令后回车执行（在本机运行，如 dir / ipconfig / ping）"
+                       autocomplete="off" spellcheck="false">
+            </div>
+        </div>
+
+        <!-- 模式三：实时日志（默认隐藏；从日志抓取卡片迁移而来） -->
+        <div id="live-log-panel" class="live-log-panel" style="display:none">
+            <div class="live-log-toolbar">
+                <!-- 最低级别：切换后重启实时会话（logcat 原生过滤，设备端完成） -->
+                <select id="live-level" class="select live-level-select" title="只显示该级别及以上的日志">
+                    <option value="V">Verbose（全部）</option>
+                    <option value="D">Debug</option>
+                    <option value="I" selected>Info</option>
+                    <option value="W">Warn</option>
+                    <option value="E">Error</option>
+                    <option value="F">Fatal</option>
+                </select>
+                <!-- 关键字：前端即时过滤已缓冲的日志（匹配 Tag 或正文，不区分大小写） -->
+                <input id="live-keyword" class="input live-keyword-input" type="text"
+                       placeholder="关键字过滤（Tag / 内容）">
+                <!-- 包名过滤（参考 Android Studio 的 package: 过滤）：
+                     回车应用——后端把包名解析成 pid 并以 --pid 过滤，只看该应用日志；
+                     清空输入回车 = 取消过滤。要求应用处于运行中 -->
+                <input id="live-pkg" class="input live-pkg-input" type="text"
+                       placeholder="按包名过滤（回车应用，需应用运行中）"
+                       title="只看指定应用的日志：输入完整包名后回车；清空后回车取消。应用需在运行中（等价于 Android Studio 的 package 过滤）">
+                <!-- 暂停：停止界面刷新但后台继续缓冲，恢复时补齐展示 -->
+                <button id="btn-live-pause" class="live-tool-btn">暂停</button>
+                <!-- 清空：清缓冲与视图（会话保持运行）——位于暂停与滚动到最新之间（V1.9 调整） -->
+                <button id="btn-live-clear" class="live-tool-btn">清空</button>
+                <!-- 滚动到最新：图标式切换按钮（替代旧版勾选框，一眼可辨）。
+                     高亮=自动跟随最新一行；点击切换；向上翻看历史自动熄灭、
+                     滚回底部自动点亮 -->
+                <button id="btn-live-follow" class="live-tool-btn live-follow-btn live-follow-active"
+                        title="滚动到最新一行：点亮时自动跟随最新日志；向上翻看历史会自动熄灭，滚回底部自动点亮">
+                    ⬇ 滚动到最新
+                </button>
+                <!-- 状态：启动中 / 运行中（行数）/ 已暂停 / 已结束 -->
+                <span id="live-status" class="hint">未启动</span>
+            </div>
+            <!-- 日志视图：等宽字体深色背景，内部滚动；行由 JS 按结构渲染并按级别着色 -->
+            <div id="live-log-view" class="live-log-view"></div>
+        </div>
     </section>
 
     <!-- ==================== 「查看设备列表」弹窗 ==================== -->
