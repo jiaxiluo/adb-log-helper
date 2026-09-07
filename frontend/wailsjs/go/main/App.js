@@ -34,6 +34,10 @@ export function GetDevicesDetail() {
   return window['go']['main']['App']['GetDevicesDetail']();
 }
 
+export function GetRecentDevices() {
+  return window['go']['main']['App']['GetRecentDevices']();
+}
+
 export function InstallAPK(arg1, arg2) {
   return window['go']['main']['App']['InstallAPK'](arg1, arg2);
 }
@@ -94,8 +98,8 @@ export function StartLiveLog(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartLiveLog'](arg1, arg2, arg3);
 }
 
-export function StartLogcat(arg1, arg2) {
-  return window['go']['main']['App']['StartLogcat'](arg1, arg2);
+export function StartLogcat(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartLogcat'](arg1, arg2, arg3);
 }
 
 export function StopLiveLog() {

@@ -24,6 +24,7 @@ import (
 //   - logCancel: 日志抓取会话的取消函数
 //   - liveSession: 当前实时日志会话（与 session 相互独立，互不影响）
 //   - cmdCwd:   命令行模式的会话工作目录（cd 持久化用，初始 = exe 目录）
+//   - history:  设备连接历史跟踪器（跟随设备列表刷新记录最近断开的设备）
 type App struct {
 	ctx         context.Context
 	adbPath     string
@@ -31,11 +32,12 @@ type App struct {
 	logCancel   context.CancelFunc
 	liveSession *adb.LiveLogSession
 	cmdCwd      string
+	history     *adb.DeviceHistory
 }
 
 // NewApp 创建一个 App 实例。
 func NewApp() *App {
-	return &App{}
+	return &App{history: adb.NewDeviceHistory()}
 }
 
 // startup 在 Wails 应用启动时被框架调用。
@@ -144,12 +146,29 @@ func (a *App) GetAdbStatus() string {
 
 // GetDevices 返回当前已连接的设备列表（对应 adb devices）。
 // 供设备下拉框的后台轮询使用，只取序列号与状态，开销小。
+// 同时把结果喂给历史跟踪器，自动记录"连接过又断开"的设备。
 // 返回: 设备列表与错误。
 func (a *App) GetDevices() ([]adb.Device, error) {
 	if err := a.ensureAdb(); err != nil {
 		return nil, err
 	}
-	return adb.Devices(a.adbPath)
+	devices, err := adb.Devices(a.adbPath)
+	if err == nil {
+		serials := make([]string, 0, len(devices))
+		for _, d := range devices {
+			serials = append(serials, d.Serial)
+		}
+		a.history.Update(serials)
+	}
+	return devices, err
+}
+
+// GetRecentDevices 返回最近连接过但当前已断开的设备记录（最多 3 条，最新在前）。
+// 数据来自历史跟踪器（持久化在程序目录 device_history.json，重启不丢）。
+// 供「查看设备列表」弹窗的历史区展示。
+// 返回: 历史记录列表与错误。
+func (a *App) GetRecentDevices() ([]adb.HistoryEntry, error) {
+	return a.history.Recent(), nil
 }
 
 // GetDevicesDetail 返回所有设备的完整信息（序列号/状态/连接方式/型号/安卓版本）。
@@ -331,11 +350,21 @@ func (a *App) SelectDirectory() (string, error) {
 // 入参:
 //   - serial: 目标设备序列号
 //   - saveDir: 日志保存根目录；空字符串表示默认位置（程序目录下 logs/）
+//   - clearBefore: 为 true 时先执行 adb logcat -c 清空设备端日志缓冲，
+//     本次抓取只记录新产生的日志（不含启动前的旧日志）
 //
 // 返回: 本次抓取的日志文件完整路径与错误。
-func (a *App) StartLogcat(serial, saveDir string) (string, error) {
+func (a *App) StartLogcat(serial, saveDir string, clearBefore bool) (string, error) {
 	if err := a.ensureAdb(); err != nil {
 		return "", err
+	}
+
+	// 可选的前置清空：失败则中止抓取并返回原因（缓冲未清成功，
+	// 抓出来的日志会混入旧日志，与用户勾选的预期不符）
+	if clearBefore {
+		if _, err := adb.ClearLogcat(a.adbPath, serial); err != nil {
+			return "", fmt.Errorf("清空设备日志缓冲失败: %w", err)
+		}
 	}
 
 	// 若已有会话，先停止

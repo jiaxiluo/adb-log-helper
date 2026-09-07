@@ -610,6 +610,22 @@ body {
     background: rgba(148, 163, 184, .12); /* 悬停高亮，便于对准行内按钮 */
 }
 
+/* 历史区标题（最近断开的设备）：弱化的小节标题，与当前设备列表区分 */
+.device-history-title {
+    font-size: 12px;
+    color: rgba(148, 163, 184, .8);
+    margin: 2px 0 8px;
+}
+/* 历史行：整体弱化（灰灯 + 已断开标注），与在线设备行视觉区分 */
+.device-history-row {
+    opacity: .75;
+}
+/* 历史列表容器：比当前设备列表矮（最多 3 条，无需大滚动区） */
+.device-history-list {
+    max-height: 140px;
+    margin-bottom: 4px;
+}
+
 /* 状态指示灯：绿=可用 / 灰=离线 / 黄=未授权或其他异常 */
 .device-dot {
     width: 9px;

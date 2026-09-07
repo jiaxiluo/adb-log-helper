@@ -447,3 +447,15 @@ func Pull(adbPath, serial, remote, local string) (string, error) {
 func Push(adbPath, serial, local, remote string) (string, error) {
 	return run(adbPath, "-s", serial, "push", local, remote)
 }
+
+// ClearLogcat 清空设备端 logcat 日志缓冲（对应 adb -s <serial> logcat -c）。
+// 供日志抓取前的可选操作使用：勾选后本次抓取只包含新产生的日志，
+// 不带出启动前积累的旧日志。
+// 入参:
+//   - adbPath: adb 可执行文件的绝对路径
+//   - serial:  目标设备序列号
+//
+// 返回: 命令输出文本与错误
+func ClearLogcat(adbPath, serial string) (string, error) {
+	return run(adbPath, "-s", serial, "logcat", "-c")
+}

@@ -94,8 +94,8 @@
                     <button id="btn-connect" class="btn btn-success">连接</button>
                     <button id="btn-disconnect" class="btn btn-ghost">断开</button>
                     <button id="btn-refresh-devices" class="btn btn-primary">刷新设备</button>
-                    <!-- 完整设备信息弹窗：连接方式/状态/型号/安卓版本，可直接选为当前设备 -->
-                    <button id="btn-view-devices" class="btn">查看设备列表</button>
+                    <!-- 完整设备信息弹窗：连接方式/状态/型号/安卓版本 + 最近断开的历史设备 -->
+                    <button id="btn-view-devices" class="btn">查看设备与历史</button>
                 </div>
                 <!-- 设备下拉框：列表由后台自动刷新（3 秒轮询 + 窗口聚焦即刷新），
                      展开即可看到最新设备，无需先手动刷新 -->
@@ -199,6 +199,13 @@
                 <!-- 抓取状态：未抓取 / 抓取中 + 日志文件路径 -->
                 <span id="logcat-status" class="hint">当前状态：未抓取</span>
             </div>
+            <!-- 可选前置操作：勾选后本次抓取前先执行 adb logcat -c 清空设备端日志缓冲，
+                 抓取文件中只包含点「开始抓取」之后新产生的日志 -->
+            <div class="row">
+                <label class="checkbox" title="抓取前先清空设备端的日志缓冲区（adb logcat -c）">
+                    <input id="log-clear-before" type="checkbox"> 抓取前清空设备日志缓冲
+                </label>
+            </div>
             <!-- 实时日志入口已移至底部面板的模式切换（操作反馈 / 命令行 / 实时日志） -->
         </section>
     </div>
@@ -283,17 +290,21 @@
         </div>
     </section>
 
-    <!-- ==================== 「查看设备列表」弹窗 ==================== -->
+    <!-- ==================== 「查看设备与历史」弹窗 ==================== -->
     <!-- 展示每台设备的完整信息：状态灯 + 序列号 + 连接方式 + 型号/品牌/安卓版本三行属性；
          可用设备可一键「选为当前设备」，TCP 设备可直接「断开」。
+         下方历史区展示最近连接过但已断开的设备（最多 3 条，来自后端持久化记录）。
          数据在打开与点击「刷新」时向后端取一次（含 getprop 属性查询） -->
     <div id="device-modal" class="modal-overlay" style="display:none">
         <div class="modal-card device-modal-card">
-            <h3 class="modal-title">当前设备列表</h3>
+            <h3 class="modal-title">当前设备与历史记录</h3>
             <!-- 状态行：加载中 / 设备总数 / 错误原因 -->
             <div id="device-modal-status" class="device-modal-status">正在获取设备信息…</div>
             <!-- 设备列表：每行由 JS 动态渲染（device-modal-row） -->
             <div id="device-modal-list" class="device-modal-list"></div>
+            <!-- 历史区标题 + 列表：最近断开的设备（最多 3 条），由 JS 动态渲染 -->
+            <div id="device-history-title" class="device-history-title" style="display:none">最近断开的设备（最多 3 条）</div>
+            <div id="device-history-list" class="device-modal-list device-history-list"></div>
             <div class="modal-actions">
                 <button id="btn-device-modal-refresh" class="btn modal-btn-cancel">刷新</button>
                 <button id="btn-device-modal-close" class="btn modal-btn-cancel">关闭</button>

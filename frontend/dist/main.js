@@ -355,6 +355,10 @@ async function loadDeviceModal() {
     statusEl.textContent = "正在获取设备信息（含设备属性查询，约 1~2 秒）…";
     listEl.innerHTML = "";
 
+    // 历史区与当前设备列表互不影响：无论下方走到哪个分支都加载
+    // （无设备/获取失败时历史记录仍有参考价值）
+    loadDeviceHistory();
+
     const res = await run(window.go.main.App.GetDevicesDetail());
     if (!res.ok) {
         statusEl.textContent = "❌ 获取设备列表失败：" + res.err;
@@ -370,6 +374,74 @@ async function loadDeviceModal() {
     statusEl.textContent = "共 " + devices.length
         + " 台设备（型号/品牌/安卓为「未知」或「-」表示设备不可用或查询超时）";
     renderDeviceModalList(devices);
+}
+
+// 拉取并渲染历史设备区（最近连接过但当前已断开的设备，最多 3 条）。
+// 历史记录展示失败不影响上方已渲染的当前设备列表
+async function loadDeviceHistory() {
+    const titleEl = $("device-history-title");
+    const listEl = $("device-history-list");
+    listEl.innerHTML = "";
+
+    const res = await run(window.go.main.App.GetRecentDevices());
+    const entries = res.ok ? (res.result || []) : [];
+
+    if (entries.length === 0) {
+        titleEl.style.display = "none";
+        return;
+    }
+    titleEl.style.display = "block";
+    entries.forEach(function (entry) {
+        const row = document.createElement("div");
+        row.className = "device-modal-row device-history-row";
+
+        // 灰色状态灯：历史设备均为已断开状态
+        const dot = document.createElement("span");
+        dot.className = "device-dot device-dot-off";
+        dot.title = "已断开";
+        row.appendChild(dot);
+
+        // 左列：序列号 + 断开时间
+        const mainEl = document.createElement("div");
+        mainEl.className = "device-main";
+        const serialEl = document.createElement("div");
+        serialEl.className = "device-serial";
+        serialEl.textContent = entry.serial;
+        serialEl.title = entry.serial;
+        mainEl.appendChild(serialEl);
+        const stateEl = document.createElement("div");
+        stateEl.className = "device-state";
+        stateEl.textContent = "已断开 · " + formatHistoryTime(entry.disconnectedAt);
+        mainEl.appendChild(stateEl);
+        row.appendChild(mainEl);
+
+        // TCP 设备给一键重连按钮（USB 设备重新插上即出现在当前列表）
+        if (entry.serial.indexOf(":") >= 0) {
+            const btns = document.createElement("div");
+            btns.className = "device-actions";
+            const btn = document.createElement("button");
+            btn.className = "btn btn-sm btn-primary";
+            btn.textContent = "重新连接";
+            btn.dataset.action = "reconnect";
+            btn.dataset.serial = entry.serial;
+            btns.appendChild(btn);
+            row.appendChild(btns);
+        }
+
+        listEl.appendChild(row);
+    });
+}
+
+// 格式化历史时间：把后端 RFC3339 时间转为 "MM-dd HH:MM" 展示。
+// 解析失败时返回 "-"（历史时间仅作参考，不值得报错打断用户）
+function formatHistoryTime(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) {
+        return "-";
+    }
+    const p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return (d.getMonth() + 1) + "-" + p(d.getDate()) + " "
+        + p(d.getHours()) + ":" + p(d.getMinutes());
 }
 
 // 渲染弹窗内的设备列表：每行 = 状态灯 + 序列号 + 连接方式 + 属性 + 操作按钮。
@@ -473,7 +545,18 @@ async function onDeviceModalClick(event) {
         pickDeviceFromModal(serial);
     } else if (action === "disconnect") {
         await disconnectFromModal(serial);
+    } else if (action === "reconnect") {
+        await reconnectFromHistory(serial);
     }
+}
+
+// 从历史区重连一台 TCP 设备（adb connect），成功后刷新弹窗与主界面下拉框
+async function reconnectFromHistory(serial) {
+    pushOutput("正在重新连接设备：" + serial + " …");
+    const res = await run(window.go.main.App.Connect(serial));
+    pushOutput(res.ok ? "✅ " + res.result : "❌ 连接失败：" + res.err);
+    await loadDeviceModal();
+    await refreshDevices(false);
 }
 
 // 从弹窗把某台设备设为当前目标设备：
@@ -514,48 +597,8 @@ async function disconnectFromModal(serial) {
     await refreshDevices(false);
 }
 
-// 组装连接地址：IP 必填；端口留空时由 Go 侧补默认 5555
-function buildConnectAddress() {
-    const ip = $("connect-ip").value.trim();
-    if (!ip) {
-        pushOutput("⚠️ 请输入设备 IP 地址。");
-        return "";
-    }
-    const port = $("connect-port").value.trim();
-    // 端口留空 → 只传 IP，Go 侧自动补 5555；填了则拼 "ip:port"
-    return port ? ip + ":" + port : ip;
-}
-
-// 连接 TCP 设备：adb connect <ip:port>，成功后自动刷新设备列表
-async function doConnect() {
-    const address = buildConnectAddress();
-    if (!address) return;
-
-    pushOutput("正在连接设备：" + address + " …");
-    const res = await run(window.go.main.App.Connect(address));
-    if (!res.ok) {
-        pushOutput("❌ 连接失败：" + res.err);
-        return;
-    }
-    // 无论新连接还是已连接，都刷新列表让设备出现在下拉框
-    await refreshDevices();
-    pushOutput("✅ " + res.result);
-}
-
-// 断开 TCP 设备：adb disconnect <ip:port>，成功后自动刷新设备列表
-async function doDisconnect() {
-    const address = buildConnectAddress();
-    if (!address) return;
-
-    pushOutput("正在断开设备：" + address + " …");
-    const res = await run(window.go.main.App.Disconnect(address));
-    if (!res.ok) {
-        pushOutput("❌ 断开失败：" + res.err);
-        return;
-    }
-    await refreshDevices();
-    pushOutput("✅ " + res.result);
-}
+// （说明：buildConnectAddress / doConnect / doDisconnect 此处曾有一份
+//  与上文完全重复的定义（旧版遗留，后者覆盖前者），已清理，仅保留上文一份）
 
 /* ---------------------------------------------------------------------------
  * 应用管理（查询 → 列表渲染 → 行内操作）
@@ -852,14 +895,17 @@ async function pickLogDir() {
  * 日志抓取（一键开始 / 结束，无实时终端）
  * ------------------------------------------------------------------------ */
 
-// 开始抓取：调用后端 StartLogcat，界面只更新状态行与反馈，不展示日志内容
+// 开始抓取：调用后端 StartLogcat，界面只更新状态行与反馈，不展示日志内容。
+// 勾选「抓取前清空设备日志缓冲」时后端先执行 adb logcat -c，
+// 本次抓取只记录新产生的日志
 async function doStartLogcat() {
     const serial = requireDevice();
     if (!serial) return;
     const dir = $("log-dir").value.trim(); // 留空时后端使用默认 logs/ 目录
+    const clearBefore = $("log-clear-before").checked; // 可选：先清空设备端日志缓冲
 
     $("logcat-status").textContent = "当前状态：正在启动…";
-    const res = await run(window.go.main.App.StartLogcat(serial, dir));
+    const res = await run(window.go.main.App.StartLogcat(serial, dir, clearBefore));
     if (!res.ok) {
         $("logcat-status").textContent = "当前状态：启动失败";
         pushOutput("❌ 日志抓取启动失败：" + res.err);
@@ -867,7 +913,8 @@ async function doStartLogcat() {
     }
     // 后端返回本次日志文件的完整路径，展示给用户便于定位
     $("logcat-status").textContent = "当前状态：抓取中（设备 " + serial + "）";
-    pushOutput("✅ 日志抓取已开始，文件：" + res.result);
+    pushOutput("✅ 日志抓取已开始，文件：" + res.result
+        + (clearBefore ? "（已先清空设备日志缓冲）" : ""));
 }
 
 // 结束抓取：StopLogcat 幂等，直接调用即可

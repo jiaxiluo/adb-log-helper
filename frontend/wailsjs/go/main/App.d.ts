@@ -18,6 +18,8 @@ export function GetDevices():Promise<Array<adb.Device>>;
 
 export function GetDevicesDetail():Promise<Array<adb.DeviceDetail>>;
 
+export function GetRecentDevices():Promise<Array<adb.HistoryEntry>>;
+
 export function InstallAPK(arg1:string,arg2:string):Promise<string>;
 
 export function InstallAdbLocal(arg1:string):Promise<string>;
@@ -48,7 +50,7 @@ export function StartApp(arg1:string,arg2:string):Promise<string>;
 
 export function StartLiveLog(arg1:string,arg2:string,arg3:string):Promise<void>;
 
-export function StartLogcat(arg1:string,arg2:string):Promise<string>;
+export function StartLogcat(arg1:string,arg2:string,arg3:boolean):Promise<string>;
 
 export function StopLiveLog():Promise<void>;
 
