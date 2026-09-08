@@ -154,13 +154,21 @@ func (a *App) GetDevices() ([]adb.Device, error) {
 	}
 	devices, err := adb.Devices(a.adbPath)
 	if err == nil {
-		serials := make([]string, 0, len(devices))
-		for _, d := range devices {
-			serials = append(serials, d.Serial)
-		}
-		a.history.Update(serials)
+		a.updateHistory(devices)
 	}
 	return devices, err
+}
+
+// updateHistory 把一次设备列表查询结果喂给历史跟踪器。
+// 在线设备刷新最后在线时间并清除断开标记（重连后立即从
+// 「最近断开的设备」中消失），消失设备记一次断开时间。
+// 入参: devices 当前查到的设备列表
+func (a *App) updateHistory(devices []adb.Device) {
+	serials := make([]string, 0, len(devices))
+	for _, d := range devices {
+		serials = append(serials, d.Serial)
+	}
+	a.history.Update(serials)
 }
 
 // GetRecentDevices 返回最近连接过但当前已断开的设备记录（最多 3 条，最新在前）。
@@ -194,7 +202,15 @@ func (a *App) Connect(address string) (string, error) {
 	if err := a.ensureAdb(); err != nil {
 		return "", err
 	}
-	return adb.Connect(a.adbPath, address)
+	out, err := adb.Connect(a.adbPath, address)
+	if err == nil {
+		// 连接成功后立即用最新设备列表刷新历史：重连设备马上清除断开
+		// 标记，无需等 3 秒轮询（否则弹窗里「最近断开的设备」短暂残留）
+		if devices, devErr := adb.Devices(a.adbPath); devErr == nil {
+			a.updateHistory(devices)
+		}
+	}
+	return out, err
 }
 
 // Disconnect 断开一台 TCP 设备（对应 adb disconnect <ip:port>）。
@@ -204,7 +220,12 @@ func (a *App) Disconnect(address string) (string, error) {
 	if err := a.ensureAdb(); err != nil {
 		return "", err
 	}
-	return adb.Disconnect(a.adbPath, address)
+	out, err := adb.Disconnect(a.adbPath, address)
+	if err == nil {
+		// 主动断开立即记入历史（不等轮询防抖），断开后弹窗刷新即见
+		a.history.MarkDisconnected(address)
+	}
+	return out, err
 }
 
 // StartApp 启动设备上的指定应用（拉起到前台）。
@@ -411,8 +432,8 @@ func (a *App) StopLogcat() {
 //   - serial:   目标设备序列号
 //   - minLevel: 最低日志级别（V/D/I/W/E/F；非法值按 V 全量处理）
 //   - pkg:      包名过滤（参考 AS 的 package: 过滤）。非空时先查该应用的
-//               进程号并以 --pid= 过滤——只看这个应用的日志；
-//               应用未运行时返回友好错误提示
+//     进程号并以 --pid= 过滤——只看这个应用的日志；
+//     应用未运行时返回友好错误提示
 //
 // 返回: 启动失败错误
 func (a *App) StartLiveLog(serial, minLevel, pkg string) error {

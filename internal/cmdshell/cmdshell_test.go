@@ -27,15 +27,15 @@ func TestParseCd(t *testing.T) {
 		target string
 		isCd   bool
 	}{
-		{"cd", "", true},                      // 无参：显示当前目录
-		{"CD", "", true},                      // 大小写不敏感
-		{"cd /d D:/work", "D:/work", true},     // 跨盘切换
-		{"cd ..", "..", true},                  // 相对上级
+		{"cd", "", true},                   // 无参：显示当前目录
+		{"CD", "", true},                   // 大小写不敏感
+		{"cd /d D:/work", "D:/work", true}, // 跨盘切换
+		{"cd ..", "..", true},              // 相对上级
 		{"cd \"C:/Program Files\"", "C:/Program Files", true}, // 带引号路径
-		{"  cd   /temp ", "/temp", true},       // 前后空格
-		{"dir", "", false},                     // 非 cd 命令
-		{"echo cd test", "", false},            // cd 在参数位不算
-		{"cdx abc", "", false},                 // cd 前缀但非 cd 命令
+		{"  cd   /temp ", "/temp", true},                      // 前后空格
+		{"dir", "", false},                                    // 非 cd 命令
+		{"echo cd test", "", false},                           // cd 在参数位不算
+		{"cdx abc", "", false},                                // cd 前缀但非 cd 命令
 	}
 	for _, c := range cases {
 		target, isCd := ParseCd(c.in)

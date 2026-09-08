@@ -176,6 +176,26 @@ func (h *DeviceHistory) recentLocked(limit int) []*HistoryEntry {
 	return list
 }
 
+// MarkDisconnected 立即把一台设备记为已断开（用户主动断开后调用，
+// 不等轮询防抖 —— 防抖只为过滤 adb server 抖动，主动断开是明确意图）。
+// 设备不在记录中时忽略（从未在线过的设备无历史可记）。
+// 入参: serial 设备序列号（TCP 设备为 ip:port）
+func (h *DeviceHistory) MarkDisconnected(serial string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	e, ok := h.entries[serial]
+	if !ok {
+		return
+	}
+	e.absentPolls = 0 // 主动断开已记时间，防抖计数重置避免后续轮询重复处理
+	if e.DisconnectedAt.IsZero() {
+		e.DisconnectedAt = time.Now()
+		h.pruneLocked()
+		h.persistLocked()
+	}
+}
+
 // Recent 返回最近断开的设备记录（最多 HistoryMax 条，最新在前）。
 func (h *DeviceHistory) Recent() []HistoryEntry {
 	h.mu.Lock()

@@ -289,21 +289,6 @@ async function doConnect() {
     pushOutput("✅ " + res.result);
 }
 
-// 断开 TCP 设备：adb disconnect <ip:port>，成功后自动刷新设备列表
-async function doDisconnect() {
-    const address = buildConnectAddress();
-    if (!address) return;
-
-    pushOutput("正在断开设备：" + address + " …");
-    const res = await run(window.go.main.App.Disconnect(address));
-    if (!res.ok) {
-        pushOutput("❌ 断开失败：" + res.err);
-        return;
-    }
-    await refreshDevices(true);
-    pushOutput("✅ " + res.result);
-}
-
 /* ---------------------------------------------------------------------------
  * 「查看设备列表」弹窗：完整展示每台设备的序列号 / 连接方式 / 状态 /
  * 型号 / 品牌 / 安卓版本，并支持直接「选为当前设备」「断开 TCP 设备」。
@@ -1753,13 +1738,14 @@ function init() {
 
     // ---- 设备连接 ----
     $("btn-connect").addEventListener("click", doConnect);
-    $("btn-disconnect").addEventListener("click", doDisconnect);
     // 「查看设备列表」弹窗：完整设备信息（连接方式/状态/型号/安卓版本）
     $("btn-view-devices").addEventListener("click", openDeviceModal);
     // 弹窗内：刷新按钮重新拉取，关闭按钮收起；列表行内按钮事件委托分发
     $("btn-device-modal-refresh").addEventListener("click", loadDeviceModal);
     $("btn-device-modal-close").addEventListener("click", closeDeviceModal);
     $("device-modal-list").addEventListener("click", onDeviceModalClick);
+    // 历史区与当前设备列表是两个容器，「重新连接」按钮也要走同一套事件委托
+    $("device-history-list").addEventListener("click", onDeviceModalClick);
 
     // 注意：设备下拉框不再挂 mousedown 自动刷新 ——
     // 旧实现会在下拉展开期间异步重建选项，导致弹窗被收起、选中值丢失；

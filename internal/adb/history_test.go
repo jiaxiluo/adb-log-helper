@@ -55,11 +55,36 @@ func TestHistoryRecordDisconnect(t *testing.T) {
 func TestHistoryDebounceTransientGap(t *testing.T) {
 	h, _ := newTestHistory(t)
 	h.Update([]string{"devA"})
-	h.Update(nil)  // 缺席 1 次
+	h.Update(nil)              // 缺席 1 次
 	h.Update([]string{"devA"}) // 立刻回来
 
 	if got := h.Recent(); len(got) != 0 {
 		t.Fatalf("瞬时抖动不应产生历史记录，实际 %d 条", len(got))
+	}
+}
+
+// 场景：用户主动断开 → 立即记入历史（不等 2 次缺席防抖）
+func TestHistoryMarkDisconnectedImmediate(t *testing.T) {
+	h, _ := newTestHistory(t)
+	h.Update([]string{"192.168.1.100:5555"})
+
+	h.MarkDisconnected("192.168.1.100:5555") // 一次缺席都没有
+	if got := h.Recent(); len(got) != 1 {
+		t.Fatalf("主动断开应立即记入历史，实际 %d 条", len(got))
+	}
+
+	// 未知设备（从未在线）不应产生记录
+	h.MarkDisconnected("10.0.0.9:5555")
+	if got := h.Recent(); len(got) != 1 {
+		t.Fatalf("未知设备不应产生历史记录，实际 %d 条", len(got))
+	}
+
+	// 重复调用不覆盖首次断开时间
+	first := h.Recent()[0].DisconnectedAt
+	time.Sleep(10 * time.Millisecond)
+	h.MarkDisconnected("192.168.1.100:5555")
+	if again := h.Recent()[0].DisconnectedAt; !again.Equal(first) {
+		t.Fatalf("重复 MarkDisconnected 不应刷新断开时间")
 	}
 }
 
@@ -106,7 +131,7 @@ func TestHistoryMaxThree(t *testing.T) {
 }
 
 // 场景：持久化时断开记录不被在线记录挤掉
-//（review 发现：总量截断若按 LastSeen 排序，在线设备多时断开记录可能落榜）
+// （review 发现：总量截断若按 LastSeen 排序，在线设备多时断开记录可能落榜）
 func TestHistoryPersistKeepsDisconnected(t *testing.T) {
 	h, path := newTestHistory(t)
 

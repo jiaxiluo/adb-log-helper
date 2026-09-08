@@ -142,8 +142,8 @@ func DecodeConsoleBytes(b []byte) string {
 
 // RunCommand 在指定工作目录中执行一条 cmd 命令。
 // 处理顺序：
-//   1. cd 命令 → 解析并切换内部工作目录（不起进程）
-//   2. 其余命令 → cmd.exe /C <command>（隐藏窗口，10 秒超时，stdout/stderr 合并）
+//  1. cd 命令 → 解析并切换内部工作目录（不起进程）
+//  2. 其余命令 → cmd.exe /C <command>（隐藏窗口，10 秒超时，stdout/stderr 合并）
 //
 // 命令的"业务失败"（如 dir 不存在的路径、exit code 非 0）不算 error：
 // 输出文本本身就是结果，返回给前端展示即可；error 仅在无法启动进程时出现。
