@@ -187,6 +187,32 @@ func TestParsePackagesEmpty(t *testing.T) {
 	}
 }
 
+// TestParsePackagesLegacyFormat 验证旧版系统（约 Android 4.0 及之前，常见于机顶盒）
+// 的 "package:/data/app/xxx-1.apk=pkgname" 格式解析：必须剥离 apk 路径前缀，
+// 只留 "=" 之后的纯包名；新旧格式混排时同样正确。
+func TestParsePackagesLegacyFormat(t *testing.T) {
+	output := "package:/data/app/com.cmhi.softmbh-1.apk=com.cmhi.softmbh\n" +
+		"package:/data/app/com.example.app-2.apk=com.example.app\n" +
+		"package:com.newformat.app\n"
+
+	pkgs := parsePackages(output, "")
+	if len(pkgs) != 3 {
+		t.Fatalf("包数量不符: 期望 3, 实际 %d (%v)", len(pkgs), pkgs)
+	}
+	want := []string{"com.cmhi.softmbh", "com.example.app", "com.newformat.app"}
+	for i, w := range want {
+		if pkgs[i] != w {
+			t.Fatalf("第 %d 个包名不符: 期望 %s, 实际 %s", i, w, pkgs[i])
+		}
+	}
+
+	// 过滤也必须作用于剥离后的纯包名
+	filtered := parsePackages(output, "cmhi")
+	if len(filtered) != 1 || filtered[0] != "com.cmhi.softmbh" {
+		t.Fatalf("旧格式下过滤结果不符: %v", filtered)
+	}
+}
+
 // ----------------------------------------------------------------------------
 // NormalizeAddress 测试组
 // ----------------------------------------------------------------------------

@@ -398,6 +398,13 @@ func ListPackages(adbPath, serial, filter string, thirdPartyOnly bool) ([]string
 }
 
 // parsePackages 解析 pm list packages 的文本输出，得到包名列表。
+// 兼容两种输出格式：
+//   - 新版系统（Android 4.1+）: "package:com.example.app"
+//   - 旧版系统（约 4.0 及之前，常见于机顶盒）: "package:/data/app/xxx-1.apk=com.example.app"，
+//     行内含 apk 路径前缀，"=" 之后才是包名。若不剥离路径部分，包名会被误判为
+//     "/data/app/xxx-1.apk=com.example.app"，导致 pm clear / am start 等按包名
+//     执行的操作全部失败
+//
 // 独立成函数便于单元测试（无需真实设备/adb 环境）。
 // 入参:
 //   - output: pm list packages 的原始输出文本
@@ -413,6 +420,11 @@ func parsePackages(output string, filter string) []string {
 			continue
 		}
 		name := strings.TrimPrefix(line, "package:")
+		// 旧版格式带 "路径=包名" 前缀，取最后一个 "=" 之后的部分作为包名
+		// （包名本身不含 "="，用 LastIndex 防止路径中偶发的 "=" 干扰）
+		if idx := strings.LastIndex(name, "="); idx >= 0 {
+			name = name[idx+1:]
+		}
 		// 关键字过滤
 		if filter != "" && !strings.Contains(name, filter) {
 			continue

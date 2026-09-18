@@ -7,7 +7,7 @@
 
 # ---- 构建产物 ----
 # wails 构建输出目录（build/ 下的图标与安装器配置保留，仅排除 bin/）
-build/bin/
+code/build/bin/
 
 # 所有可执行文件（本地构建的 exe 不进仓库，通过 GitHub Release 分发）
 *.exe
@@ -28,7 +28,7 @@ wails-*.log
 
 # ---- 本地专用文档 ----
 # 交接文档是本地迭代开发用的工作文档，不随仓库发布
-交接文档.md
+docs/交接文档.md
 
 # ---- IDE / 编辑器 ----
 .idea/

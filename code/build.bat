@@ -82,13 +82,14 @@ if %errorlevel% neq 0 (
 )
 del wails-build.log >nul 2>&1
 
-REM ---- 5. Publish: keep ONE exe copy in adb-helper\ ----
+REM ---- 5. Publish: keep ONE exe copy in adb-helper\ (project root) ----
 REM The project keeps a single program copy in adb-helper\ (next to
-REM platform-tools.zip). The build\bin output is replaced each build.
-if not exist adb-helper mkdir adb-helper
-copy /y build\bin\adb-log-helper.exe adb-helper\adb-log-helper.exe >nul
+REM platform-tools.zip, one level above code\). The build\bin output is
+REM replaced each build.
+if not exist ..\adb-helper mkdir ..\adb-helper
+copy /y build\bin\adb-log-helper.exe ..\adb-helper\adb-log-helper.exe >nul
 if %errorlevel% neq 0 (
-    echo [ERROR] Failed to copy exe to adb-helper\.
+    echo [ERROR] Failed to copy exe to ..\adb-helper\.
     pause
     exit /b 1
 )

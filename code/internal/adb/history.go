@@ -168,6 +168,12 @@ func (h *DeviceHistory) recentLocked(limit int) []*HistoryEntry {
 		}
 	}
 	sort.Slice(list, func(i, j int) bool {
+		// 断开时刻相同时（快速连续断开可能落在同一时钟刻度），
+		// 以序列号倒序决胜，保证输出顺序确定：map 遍历序随机 +
+		// 非稳定排序会让同刻度的记录顺序每次不同
+		if list[i].DisconnectedAt.Equal(list[j].DisconnectedAt) {
+			return list[i].Serial > list[j].Serial
+		}
 		return list[i].DisconnectedAt.After(list[j].DisconnectedAt)
 	})
 	if limit > 0 && len(list) > limit {

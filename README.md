@@ -72,7 +72,7 @@ go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
 
 # 2. 构建方式一：直接双击 build.bat（已内置版本锁定与工具链设置）
 #    构建方式二：手动执行
-cd tools/adb-log-helper
+cd tools/adb-log-helper/code
 set GOTOOLCHAIN=local
 go get github.com/wailsapp/wails/v2@v2.11.0
 go mod tidy
@@ -93,32 +93,37 @@ wails dev
 
 ```
 adb-log-helper/
-├── main.go                 # 入口，wails.Run 启动窗口
-├── app.go                  # App 绑定结构体，前端可调用的 Go 方法
-├── go.mod / go.sum
-├── wails.json              # Wails 构建配置
-├── build.bat               # 一键构建脚本（成功即删日志、产物发布到 adb-helper/）
-├── check.bat               # 自动化检查（vet/fmt/build/test/wails 构建）
-├── internal/
-│   ├── adb/
-│   │   ├── detect.go       # 检测 ADB 是否已安装
-│   │   ├── install.go      # ADB 安装：本地压缩包解压 / 联网下载，配置 PATH
-│   │   ├── connect.go      # TCP 设备连接/断开（adb connect / disconnect）
-│   │   ├── logcat.go       # 一键日志抓取会话（写文件，无实时终端）
-│   │   ├── livelog.go      # 实时日志会话（级别过滤 + 批量推送 + 行解析，V1.6）
-│   │   ├── ops.go          # 常用 adb 操作封装（设备/设备详情/应用/截图/安装/pull/push）
-│   │   ├── cmd_windows.go  # hiddenCmd / hiddenCmdContext：统一创建不弹窗的子进程（可选超时）
-│   │   ├── extract_test.go # 单元测试（解压安全/设备解析/地址校验）
-│   │   └── devices_detail_test.go # 单元测试（连接方式判定/设备属性解析）
-│   │   └── download_test.go# 单元测试（联网下载核心，httptest 离线验证）
-│   ├── cmdshell/           # 命令行模式内核（V1.8）：cmd 执行 + cd 持久化 + 输出转码
-│   ├── pathx/registry.go   # Windows 注册表 PATH 操作
-│   └── ui/prompt.go        # 控制台日志输出（GUI 下被丢弃，仅调试用）
-└── frontend/
-    └── dist/
-        ├── index.html      # 前台页面结构（环境准备向导 + 单图层主界面）
-        ├── main.js         # 前端交互逻辑
-        └── style.css       # 页面样式（固定视口，面板内部滚动）
+├── README.md / LICENSE
+├── docs/
+│   └── 交接文档.md          # 本地工作记忆文档（迭代记录，不随仓库发布）
+├── code/                    # ★ 全部源码与构建脚本（构建在此目录下进行）
+│   ├── main.go              # 入口，wails.Run 启动窗口
+│   ├── app.go               # App 绑定结构体，前端可调用的 Go 方法
+│   ├── go.mod / go.sum
+│   ├── wails.json           # Wails 构建配置
+│   ├── build.bat            # 一键构建脚本（成功即删日志、产物发布到 ../adb-helper/）
+│   ├── check.bat            # 自动化检查（vet/fmt/build/test/wails 构建）
+│   ├── internal/
+│   │   ├── adb/
+│   │   │   ├── detect.go    # 检测 ADB 是否已安装
+│   │   │   ├── install.go   # ADB 安装：本地压缩包解压 / 联网下载，配置 PATH
+│   │   │   ├── connect.go   # TCP 设备连接/断开（adb connect / disconnect）
+│   │   │   ├── logcat.go    # 一键日志抓取会话（写文件，无实时终端）
+│   │   │   ├── livelog.go   # 实时日志会话（级别过滤 + 批量推送 + 行解析，V1.6）
+│   │   │   ├── ops.go       # 常用 adb 操作封装（设备/设备详情/应用/截图/安装/pull/push）
+│   │   │   ├── cmd_windows.go # hiddenCmd / hiddenCmdContext：统一创建不弹窗的子进程（可选超时）
+│   │   │   ├── extract_test.go        # 单元测试（解压安全/设备解析/地址校验）
+│   │   │   ├── devices_detail_test.go # 单元测试（连接方式判定/设备属性解析）
+│   │   │   └── download_test.go       # 单元测试（联网下载核心，httptest 离线验证）
+│   │   ├── cmdshell/        # 命令行模式内核（V1.8）：cmd 执行 + cd 持久化 + 输出转码
+│   │   ├── pathx/registry.go # Windows 注册表 PATH 操作
+│   │   └── ui/prompt.go     # 控制台日志输出（GUI 下被丢弃，仅调试用）
+│   └── frontend/
+│       └── dist/
+│           ├── index.html   # 前台页面结构（环境准备向导 + 单图层主界面）
+│           ├── main.js      # 前端交互逻辑
+│           └── style.css    # 页面样式（固定视口，面板内部滚动）
+└── adb-helper/              # 发布目录：唯一 exe 副本 + platform-tools.zip + logs/（不进仓库）
 ```
 
 ## 日志文件格式
