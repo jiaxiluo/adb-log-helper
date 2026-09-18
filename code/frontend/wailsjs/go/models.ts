@@ -81,6 +81,7 @@ export namespace main {
 	    recording: boolean;
 	    elapsed: number;
 	    phase: string;
+	    phaseDetail?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RecordState(source);
@@ -91,6 +92,7 @@ export namespace main {
 	        this.recording = source["recording"];
 	        this.elapsed = source["elapsed"];
 	        this.phase = source["phase"];
+	        this.phaseDetail = source["phaseDetail"];
 	    }
 	}
 

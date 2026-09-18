@@ -108,13 +108,12 @@ type RecordSession struct {
 
 	mu         sync.Mutex
 	phase      RecordPhase
-	errText    string          // phase == RecordError 时的原因
-	ctx        context.Context // 会话取消信号（Start 时注入）
-	cmd        *exec.Cmd       // 阶段一的 screenrecord 子进程（注入测试可为 nil）
-	waitDone   chan error      // 广播子进程退出：Wait 仅在监听 goroutine 调用一次，Stop 经此通道取结果
-	videoPath  string          // 完成后的本机视频路径（ Finished 时有效）
-	remotePath string          // 设备端临时录像路径（清理残留用）
-	startAt    time.Time       // 录制开始时刻（计时展示用）
+	errText    string     // phase == RecordError 时的原因
+	cmd        *exec.Cmd  // 阶段一的 screenrecord 子进程（注入测试可为 nil）
+	waitDone   chan error // 广播子进程退出：Wait 仅在监听 goroutine 调用一次，Stop 经此通道取结果
+	videoPath  string     // 完成后的本机视频路径（ Finished 时有效）
+	remotePath string     // 设备端临时录像路径（清理残留用）
+	startAt    time.Time  // 录制开始时刻（计时展示用）
 }
 
 // RecordRunner 抽象"执行一条 adb 命令并等它结束"（run 的最小接口，便于测试注入）。
@@ -201,7 +200,6 @@ func (s *RecordSession) Start(ctx context.Context) error {
 	if s.phase != RecordIdle {
 		return fmt.Errorf("录屏会话状态异常（%s），请先停止当前会话", s.phase)
 	}
-	s.ctx = ctx
 
 	// 生成设备端临时文件路径与本地保存路径（时间戳精确到秒，同秒重复录制由
 	// 前端「开始/停止」互斥按钮天然避免；即使重名，pull 覆盖也不产生坏文件）
@@ -307,6 +305,8 @@ func (s *RecordSession) Stop() (string, error) {
 	case RecordIdle:
 		s.mu.Unlock()
 		return "", fmt.Errorf("当前没有进行中的录屏")
+	default:
+		// RecordRecording：继续执行停止流程
 	}
 
 	// Recording → Stopping（先改状态再放锁，避免并发 Stop 双跑回传）
@@ -338,8 +338,22 @@ func (s *RecordSession) Stop() (string, error) {
 		}
 	}
 
-	// ③ 回传到本机（finalized=false 且校验不通过时保留设备端副本）
+	// ③ 回传到本机
 	localPath, err := s.pullAndValidate(remote, finalized)
+	if err == nil && !hasMoovBox(localPath) {
+		// moov 播放索引校验（所有路径统一执行）：
+		// finalized=false（强杀/信号失败）时设备端大概率未写 moov；
+		// finalized=true 也可能因 adb 连接在 SIGINT 后异常断开而缺 moov。
+		// 缺索引的文件无法播放，不能让 ftyp 头校验单方面放行——
+		// 删除本地坏文件；finalized=false 时保留设备端副本供手动恢复。
+		_ = os.Remove(localPath)
+		if finalized {
+			err = fmt.Errorf("录像文件缺少播放索引（moov），可能设备端录制未正常结束，请重试")
+		} else {
+			err = fmt.Errorf("录制未正常结束，视频缺少播放索引（moov）不可播放：" +
+				"设备端临时文件已保留，可等待结束后重试或手动 adb pull " + remote + " 尝试恢复")
+		}
+	}
 	if err != nil {
 		// 回传失败：仅当确认正常收尾时才清理设备端残留后报错；
 		// 未确认收尾时保留设备端文件（用户可手动 adb pull 补救）
@@ -477,16 +491,24 @@ func (s *RecordSession) removeRemoteQuietly(remote string) {
 }
 
 // CleanStaleRemote 清理设备端本工具留下的录屏残留（应用异常退出未能回传时）。
-// 供每次开始新录屏前与前端「开始录屏」时调用；失败静默。
+// 供每次开始新录屏前调用；失败静默。
+//
+// 只清理「过期」残留（文件名时间戳早于今天的）而非全部前缀匹配：
+// 上次会话若以「缺 moov 保留设备端副本」收场，错误信息会引导用户手动
+// adb pull 恢复——预清理若把当天的副本一并删掉，恢复承诺就成了空话；
+// 隔天之后用户大概率已处理完，此时清理不占用空间。
 func (s *RecordSession) CleanStaleRemote() {
 	s.mu.Lock()
 	adbPath := s.ADBPath
 	serial := s.Address
 	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), recordCmdTimeoutSec*time.Second)
+	defer cancel()
 	_, _ = s.runner.Run(ctx, adbPath, "-s", serial, "shell",
-		"rm", "-f", recordRemoteDir+"/"+recordRemotePrefix+"*.mp4")
-	cancel()
+		"sh", "-c",
+		"for f in "+recordRemoteDir+"/"+recordRemotePrefix+"*.mp4; do "+
+			"case $f in "+recordRemoteDir+"/"+recordRemotePrefix+time.Now().Format("20060102")+"*) ;; "+
+			"*) rm -f $f ;; esac; done")
 }
 
 // validateMp4Header 检查本地文件头部是否包含 ftyp box。
@@ -505,4 +527,41 @@ func validateMp4Header(path string) (bool, error) {
 		return false, err
 	}
 	return bytes.Contains(head[:n], []byte(ftypMagic)), nil
+}
+
+// hasMoovBox 流式扫描本地文件是否包含 moov box（mp4 播放索引）。
+// 入参: path 本地文件路径
+// 返回: 是否找到 moov（文件不可读时返回 false）
+// 说明: 录制被强杀时设备端可能未写入 moov，缺索引的文件无法播放；
+// 仅在「停止信号未确认成功/等待超时强杀」路径调用，正常退出路径无需扫描。
+func hasMoovBox(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	magic := []byte("moov")
+	keep := len(magic) - 1 // 关键字可能跨块，保留上一块末尾若干字节拼接
+	buf := make([]byte, 64*1024)
+	// 窗口缓冲复用：整轮扫描只分配一次（数百 MB 视频逐块扫时避免每块
+	// 一次 make + GC churn）；长写复用容量、短写截断长度
+	window := make([]byte, 0, keep+len(buf))
+	var tail []byte
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			window = append(window[:0], tail...)
+			window = append(window, buf[:n]...)
+			if bytes.Contains(window, magic) {
+				return true
+			}
+			if len(window) > keep {
+				tail = append(tail[:0], window[len(window)-keep:]...)
+			}
+		}
+		if rerr != nil {
+			return false
+		}
+	}
 }

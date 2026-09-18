@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -28,6 +29,11 @@ import (
 //   - cmdCwd:   命令行模式的会话工作目录（cd 持久化用，初始 = exe 目录）
 //   - history:  设备连接历史跟踪器（跟随设备列表刷新记录最近断开的设备）
 type App struct {
+	// mu 保护以下会话字段的并发访问：Wails 在独立 goroutine 上调用每个绑定
+	// 方法，Start/Stop/IsRecording 可能同时执行；录屏⇄抓取互斥是
+	// 「检查再赋值」逻辑，必须由同一把锁保证原子性（含 IsRecording 每秒轮询）。
+	mu sync.Mutex
+
 	ctx         context.Context
 	adbPath     string
 	session     *adb.LogcatSession
@@ -143,6 +149,8 @@ func (a *App) shutdown(ctx context.Context) {
 // abortScreenRecord 快速终止录屏会话（仅杀本机 adb 进程，不回传不等待）。
 // 仅供应用退出路径使用；日常停止走 StopScreenRecord（完整回传流程）。
 func (a *App) abortScreenRecord() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.recCancel != nil {
 		a.recCancel() // 取消会话 ctx → hiddenCmdContext 终止本机 adb 子进程
 		a.recCancel = nil
@@ -317,16 +325,21 @@ func (a *App) StartScreenRecord(serial, saveDir string) error {
 		return err
 	}
 
-	// 与一键日志抓取互斥
+	// 与一键日志抓取/已有录屏互斥（锁内检查，避免并发 Start 穿透；
+	// adb 清理/启动等慢操作放到锁外执行，避免长时间持锁阻塞轮询）
+	a.mu.Lock()
 	if a.session != nil {
+		a.mu.Unlock()
 		return fmt.Errorf("日志抓取进行中，请先结束抓取再开始录屏")
 	}
 	// 已有录屏会话：直接拒绝（前端「开始/停止」同位互斥按钮保证正常流程
 	// 不会走到；并发/异常场景宁可报错，也不静默丢弃上一段视频——
 	// 旧版在这里幂等预停止会「静默回传上段视频且用户永远看不到路径」）
 	if a.recSession != nil {
+		a.mu.Unlock()
 		return fmt.Errorf("已有录屏会话进行中，请先停止当前录屏")
 	}
+	a.mu.Unlock()
 
 	// 预清理设备端历史残留（上次异常退出未回传的临时文件）
 	cleaner := adb.NewRecordSession(a.adbPath, serial)
@@ -342,9 +355,17 @@ func (a *App) StartScreenRecord(serial, saveDir string) error {
 		return err
 	}
 
+	// 提交会话：再次锁内检查（慢操作期间用户可能先点了开始抓取）
+	a.mu.Lock()
+	if a.session != nil || a.recSession != nil {
+		a.mu.Unlock()
+		cancel()
+		return fmt.Errorf("会话冲突，录屏已取消（日志抓取或另一录屏已开始）")
+	}
 	a.recSession = session
 	// cancel 交由 StopScreenRecord 释放；会话活跃期间由结构体持有
 	a.recCancel = cancel
+	a.mu.Unlock()
 
 	return nil
 }
@@ -355,15 +376,22 @@ func (a *App) StartScreenRecord(serial, saveDir string) error {
 //
 // 返回: 本机视频文件完整路径与错误
 func (a *App) StopScreenRecord() (string, error) {
-	if a.recSession == nil {
+	// 锁内取出会话并立即摘除登记（原子），之后的慢速 Stop 在锁外执行——
+	// 并发的第二次 Stop/IsRecording 看到的是「无会话」，不会与本次停止竞争
+	a.mu.Lock()
+	session := a.recSession
+	cancel := a.recCancel
+	a.recSession = nil
+	a.recCancel = nil
+	a.mu.Unlock()
+
+	if session == nil {
 		return "", nil
 	}
-	path, err := a.recSession.Stop()
-	if a.recCancel != nil {
-		a.recCancel()
-		a.recCancel = nil
+	path, err := session.Stop()
+	if cancel != nil {
+		cancel()
 	}
-	a.recSession = nil
 	return path, err
 }
 
@@ -390,23 +418,30 @@ type RecordState struct {
 	Elapsed int `json:"elapsed"`
 	// Phase 状态字（idle/recording/stopping/finished/error）
 	Phase string `json:"phase"`
+	// PhaseDetail phase == error 时的人类可读原因（其余状态为空）
+	PhaseDetail string `json:"phaseDetail,omitempty"`
 }
 
 // IsRecording 返回录屏会话状态（前端每秒轮询，驱动计时与按钮互斥）。
 // 返回单 struct（Wails 绑定 1 值返回，安全 marshal）。
 func (a *App) IsRecording() RecordState {
-	if a.recSession == nil {
+	a.mu.Lock()
+	session := a.recSession
+	a.mu.Unlock()
+
+	if session == nil {
 		return RecordState{
 			Recording: false,
 			Elapsed:   0,
 			Phase:     adb.RecordIdle.String(),
 		}
 	}
-	phase, _ := a.recSession.Phase()
+	phase, detail := session.Phase()
 	return RecordState{
-		Recording: phase == adb.RecordRecording,
-		Elapsed:   a.recSession.ElapsedSec(),
-		Phase:     phase.String(),
+		Recording:   phase == adb.RecordRecording,
+		Elapsed:     session.ElapsedSec(),
+		Phase:       phase.String(),
+		PhaseDetail: detail,
 	}
 }
 
@@ -508,10 +543,14 @@ func (a *App) StartLogcat(serial, saveDir string, clearBefore bool) (string, err
 		return "", err
 	}
 
-	// 与录屏互斥（录屏进行中共用设备 shell 通道，并行互相干扰）
+	// 与录屏互斥（录屏进行中共用设备 shell 通道，并行互相干扰）。
+	// 锁内检查；StopLogcat 的慢速停止在锁外执行，不阻塞录屏轮询。
+	a.mu.Lock()
 	if a.recSession != nil {
+		a.mu.Unlock()
 		return "", fmt.Errorf("录屏进行中，请先停止录屏再开始抓取")
 	}
+	a.mu.Unlock()
 
 	// 可选的前置清空：失败则中止抓取并返回原因（缓冲未清成功，
 	// 抓出来的日志会混入旧日志，与用户勾选的预期不符）
@@ -526,7 +565,6 @@ func (a *App) StartLogcat(serial, saveDir string, clearBefore bool) (string, err
 
 	// 派生一个可取消的 context，用于停止日志抓取
 	ctx, cancel := context.WithCancel(a.ctx)
-	a.logCancel = cancel
 
 	// 创建会话并指定日志保存目录（空则由会话内部使用默认 logs/ 目录）
 	session := adb.NewLogcatSession(a.adbPath, serial)
@@ -535,24 +573,40 @@ func (a *App) StartLogcat(serial, saveDir string, clearBefore bool) (string, err
 	if err := session.Start(ctx); err != nil {
 		// 启动失败，释放取消函数
 		cancel()
-		a.logCancel = nil
 		return "", err
 	}
 
+	// 提交会话：再次锁内检查（清缓冲/启动期间录屏可能已开始，互斥必须原子）
+	a.mu.Lock()
+	if a.recSession != nil {
+		a.mu.Unlock()
+		cancel()
+		session.Stop()
+		return "", fmt.Errorf("录屏已开始，本次抓取已取消，请先停止录屏")
+	}
 	a.session = session
+	a.logCancel = cancel
+	a.mu.Unlock()
+
 	// 把日志文件路径返回给前端，用于状态展示与用户定位文件
 	return session.LogPath, nil
 }
 
 // StopLogcat 停止当前日志抓取会话（幂等，可重复调用）。
 func (a *App) StopLogcat() {
-	if a.logCancel != nil {
-		a.logCancel()
-		a.logCancel = nil
+	// 锁内原子摘除登记，慢速停止在锁外执行（与会话启动/互斥检查不竞争）
+	a.mu.Lock()
+	cancel := a.logCancel
+	session := a.session
+	a.logCancel = nil
+	a.session = nil
+	a.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
-	if a.session != nil {
-		a.session.Stop()
-		a.session = nil
+	if session != nil {
+		session.Stop()
 	}
 }
 

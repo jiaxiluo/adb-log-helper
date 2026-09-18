@@ -261,13 +261,172 @@ body {
 .select {
     max-width: 420px;
 }
-.select-wide {
-    max-width: none;             /* 设备下拉框占满整行 */
+
+/* ---------- 设备地址复合框（V1.0.2：输入 IP 连接 / 展开选择设备 二合一） ---------- */
+.combo {
+    position: relative;          /* 浮层（combo-pop）的定位锚点 */
+    flex: 1;
+    min-width: 0;
+}
+.combo-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+    transition: border-color .15s;
+}
+.combo-box:focus-within,
+.combo-box.combo-open {
+    border-color: var(--primary);
+}
+/* 当前设备状态灯：默认隐藏，选中设备后（.has-device）显示，颜色随状态 */
+.combo-dot {
+    display: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--success);  /* 默认绿=可用；离线/未授权由 JS 换色 */
+    margin-left: 10px;
+    flex-shrink: 0;
+}
+.combo.has-device .combo-dot {
+    display: block;
+}
+.combo-dot.combo-dot-off  { background: #9ca3af; }
+.combo-dot.combo-dot-warn { background: #d97706; }
+
+.combo-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    padding: 8px 8px;
+    font-size: 13px;
+    color: var(--text);
+    min-width: 0;
+    background: transparent;
+    font-family: Consolas, "Courier New", monospace; /* 序列号/IP 用等宽字体 */
+}
+.combo-input::placeholder {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #9ca3af;
 }
 
-/* 连接端口输入框：窄列即可 */
-.port-input {
-    max-width: 130px;
+/* × 清除当前选择（默认隐藏，选中设备后由 .has-device 控制显示） */
+.combo-clear {
+    display: none;
+    border: none;
+    background: #eef2f7;
+    color: var(--text-muted);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    flex-shrink: 0;
+    padding: 0;
+}
+.combo.has-device .combo-clear {
+    display: block;
+}
+.combo-clear:hover {
+    background: #dbe3ec;
+    color: var(--danger);
+}
+
+/* ▼ 展开/收起按钮 */
+.combo-toggle {
+    border: none;
+    border-left: 1px solid var(--border);
+    background: transparent;
+    cursor: pointer;
+    padding: 8px 10px;
+    color: var(--text-muted);
+    font-size: 11px;
+    flex-shrink: 0;
+}
+.combo-toggle:hover {
+    color: var(--primary);
+}
+
+/* 浮层设备列表：绝对定位贴在输入框下方，默认隐藏（.combo-open 时显示） */
+.combo-pop {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(30, 41, 59, .18);
+    z-index: 30;                 /* 盖住相邻卡片 */
+    overflow: hidden;
+}
+.combo-open .combo-pop {
+    display: block;
+}
+.combo-pop-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    background: #fafbfd;
+}
+.combo-pop-list {
+    max-height: 240px;           /* 设备多时列表内部滚动 */
+    overflow-y: auto;
+}
+.combo-pop-foot {
+    padding: 6px 12px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    background: #fafbfd;
+    border-top: 1px solid var(--border);
+}
+/* 浮层选项行：状态灯 + 序列号 + 连接方式徽标 + 状态 */
+.combo-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    border-bottom: 1px solid #f0f2f6;
+}
+.combo-opt:last-child {
+    border-bottom: none;
+}
+.combo-opt:hover {
+    background: #f1f5f9;
+}
+.combo-opt-sel {
+    background: #eff6ff;         /* 当前选中设备高亮 */
+}
+.combo-opt-sel:hover {
+    background: #dbeafe;
+}
+.combo-serial {
+    flex: 1;
+    font-family: Consolas, "Courier New", monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;     /* 超长序列号省略，悬停可见全名 */
+    white-space: nowrap;
+}
+.combo-state {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.combo-empty {
+    padding: 10px 12px;
+    font-size: 12.5px;
+    color: var(--text-muted);
 }
 
 /* 复选框标签（如「仅第三方」）：不换行、留白适中 */
@@ -751,6 +910,14 @@ body {
     color: #7dd3fc;
     border: 1px solid rgba(56, 189, 248, .32);
     white-space: nowrap;
+}
+
+/* 复合框浮层里的连接方式徽标：白底浅色主题
+   （.device-transport 原配色为深色弹窗卡设计，#7dd3fc 文字在白底上对比度不足） */
+.combo-pop .device-transport {
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
 }
 
 /* 属性列：型号 / 品牌 / 安卓版本 —— 两列网格实现"按 key 对齐" */

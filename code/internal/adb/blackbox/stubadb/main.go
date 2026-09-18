@@ -16,8 +16,8 @@ import (
 	"strings"
 )
 
-// fakeMp4 是带 ftyp box 的最小伪 mp4 内容（满足头部校验即可，无需真实编码）
-const fakeMp4 = "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+// fakeMp4 是带 ftyp 头 + moov 索引的最小伪 mp4（满足两级校验，无需真实编码）
+const fakeMp4 = "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00moov"
 
 func main() {
 	args := os.Args[1:]
@@ -27,29 +27,32 @@ func main() {
 		_ = os.WriteFile(out, []byte(strings.Join(args, "\n")), 0644)
 	}
 
-	// 录屏模拟：收到 screenrecord 命令（参数形如 -s <serial> shell
-	// screenrecord --time-limit 180 <remote>）→ 在 STUB_FILE 指定的本机路径
-	// 写一个带 ftyp 头的伪 mp4，模拟"设备端已生成录像文件"
-	// （stub 与被测程序同机，无法真造 /sdcard 文件）
-	for i, a := range args {
-		if a == "screenrecord" && i+3 < len(args) && args[i+1] == "--time-limit" {
+	// 录屏模拟：逐条识别录屏链路涉及的命令（一条调用只会命中其一）：
+	//   · shell screenrecord --time-limit <n> <remote>：
+	//     在 STUB_FILE 写一个带 ftyp 头的伪 mp4，模拟"设备端已生成录像文件"
+	//     （stub 与被测程序同机，无法真造 /sdcard 文件）
+	//   · pull <remote> <local>：把 STUB_FILE 拷贝为 <local>，模拟"文件被拉回本机"
+	//   · shell rm -f <remote>：删除 STUB_FILE，模拟"设备端清理"
+	// 匹配按子串定位，不依赖参数的精确下标（对无害的参数顺序变化保持稳健）
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "screenrecord":
 			if f := os.Getenv("STUB_FILE"); f != "" {
 				_ = os.WriteFile(f, []byte(fakeMp4), 0644)
 			}
-			break
-		}
-	}
-
-	// 回传模拟：收到 pull 命令（参数形如 -s <serial> pull <remote> <local>）→
-	// 把 STUB_FILE 拷贝为 <local>，模拟"设备端文件被拉回本机"
-	for i, a := range args {
-		if a == "pull" && i+2 < len(args) {
+			return
+		case args[i] == "pull" && i+1 < len(args):
 			if f := os.Getenv("STUB_FILE"); f != "" {
 				if data, err := os.ReadFile(f); err == nil {
-					_ = os.WriteFile(args[i+2], data, 0644)
+					_ = os.WriteFile(args[i+2], data, 0644) // i+2 = <local>
 				}
 			}
-			break
+			return
+		case args[i] == "rm" && i+2 < len(args) && args[i+1] == "-f":
+			if f := os.Getenv("STUB_FILE"); f != "" {
+				_ = os.Remove(f)
+			}
+			return
 		}
 	}
 

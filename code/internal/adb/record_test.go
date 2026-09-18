@@ -31,10 +31,10 @@ func newTestRecordSession(t *testing.T, saveDir string) (*RecordSession, *[]stri
 	s := newRecordSessionWithRunner("fake-adb", "SERIAL1", RecordRunnerFunc(
 		func(ctx context.Context, adbPath string, args ...string) (string, error) {
 			*calls = append(*calls, strings.Join(args, " "))
-			// pull 后要在本地生成一个"伪 mp4"供 ftyp 校验
+			// pull 后要在本地生成一个"伪 mp4"（ftyp+moov）供两级校验
 			if len(args) >= 3 && args[2] == "pull" {
 				local := args[4]
-				_ = os.WriteFile(local, []byte("\x00\x00\x00\x18ftypmp42..."), 0644)
+				_ = os.WriteFile(local, []byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00moov"), 0644)
 			}
 			return "ok", nil
 		}))
@@ -121,7 +121,7 @@ func TestRecordStopFallbackToPkill(t *testing.T) {
 				return "", errors.New("pidof: not found")
 			}
 			if len(args) >= 3 && args[2] == "pull" {
-				_ = os.WriteFile(args[4], []byte("\x00\x00\x00\x18ftypisom"), 0644)
+				_ = os.WriteFile(args[4], []byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00moov"), 0644)
 			}
 			return "ok", nil
 		}))
@@ -155,7 +155,7 @@ func TestRecordNaturalEndAutoPull(t *testing.T) {
 		func(ctx context.Context, adbPath string, args ...string) (string, error) {
 			*calls = append(*calls, strings.Join(args, " "))
 			if len(args) >= 3 && args[2] == "pull" {
-				_ = os.WriteFile(args[4], []byte("\x00\x00\x00\x18ftypisom"), 0644)
+				_ = os.WriteFile(args[4], []byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00moov"), 0644)
 			}
 			return "ok", nil
 		}))
@@ -333,13 +333,80 @@ func TestValidateMp4Header(t *testing.T) {
 	}
 }
 
-// --- CleanStaleRemote 命令拼装 ---
+// --- CleanStaleRemote 命令拼装（仅清过期残留，保留当天副本） ---
 
 func TestRecordCleanStaleCommand(t *testing.T) {
 	s, calls := newTestRecordSession(t, t.TempDir())
 	s.CleanStaleRemote()
 	joined := strings.Join(*calls, "\n")
-	if !strings.Contains(joined, "rm -f /sdcard/adbhelper_record_*.mp4") {
-		t.Fatalf("清理残留命令不符:\n%s", joined)
+	// 预清理经 sh -c 逐文件判断：当天时间戳的副本保留（可能是「缺 moov
+	// 保留副本」错误引导用户手动恢复的文件），隔天的清掉
+	if !strings.Contains(joined, "for f in /sdcard/adbhelper_record_*.mp4") ||
+		!strings.Contains(joined, time.Now().Format("20060102")) {
+		t.Fatalf("清理残留命令不符（应保留当天副本）:\n%s", joined)
+	}
+}
+
+// --- moov 播放索引校验 ---
+
+func TestHasMoovBox(t *testing.T) {
+	dir := t.TempDir()
+
+	// 含 moov：正常收尾的 mp4（关键字不在块边界也行——单文件一次读完）
+	moovPath := filepath.Join(dir, "moov.mp4")
+	_ = os.WriteFile(moovPath, []byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00moov..."), 0644)
+	if !hasMoovBox(moovPath) {
+		t.Fatal("含 moov 的文件应检出 true")
+	}
+
+	// 缺 moov：强杀产物（有 ftyp 无索引）
+	badPath := filepath.Join(dir, "nomoov.mp4")
+	_ = os.WriteFile(badPath, []byte("\x00\x00\x00\x18ftypmp42"+strings.Repeat("mdat-data", 1000)), 0644)
+	if hasMoovBox(badPath) {
+		t.Fatal("缺 moov 的文件应检出 false")
+	}
+
+	// 关键字跨 64KB 块边界：拼接窗口必须命中
+	// （"m" 落在第一块最后一个字节，"oov" 在第二块开头）
+	splitPath := filepath.Join(dir, "split.mp4")
+	big := make([]byte, 64*1024+4)
+	copy(big[64*1024-1:], "moov")
+	_ = os.WriteFile(splitPath, big, 0644)
+	if !hasMoovBox(splitPath) {
+		t.Fatal("跨块边界的 moov 应被检出（窗口拼接逻辑失效）")
+	}
+
+	// 文件不存在：false 不 panic
+	if hasMoovBox(filepath.Join(dir, "nope.mp4")) {
+		t.Fatal("不存在的文件应返回 false")
+	}
+}
+
+// --- finalized=true 路径缺 moov 也必须拒绝（统一 moov 校验） ---
+
+func TestRecordFinalizedButNoMoovRejected(t *testing.T) {
+	s, _ := newTestRecordSession(t, t.TempDir())
+	s.runner = RecordRunnerFunc(func(ctx context.Context, adbPath string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		// 停止信号成功（finalized=true），但 pull 回传的文件有 ftyp 无 moov
+		if strings.Contains(joined, "pidof") {
+			return "ok", nil
+		}
+		if len(args) >= 3 && args[2] == "pull" {
+			// 注意：内容里不能出现 "moov" 字样（哪怕是 "no-moov" 也会被子串扫描命中）
+			_ = os.WriteFile(args[4], []byte("\x00\x00\x00\x18ftypmp42mdatmdat"), 0644)
+		}
+		return "ok", nil
+	})
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Stop()
+	if err == nil {
+		t.Fatal("finalized=true 但缺 moov 的文件也应被拒绝")
+	}
+	if phase, _ := s.Phase(); phase != RecordError {
+		t.Fatalf("应处于 error 态，实际 %s", phase)
 	}
 }

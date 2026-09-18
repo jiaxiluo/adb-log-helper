@@ -62,14 +62,15 @@ function clearOutput() {
     $("cmd-output").textContent = "";
 }
 
-// 获取当前选中的设备序列号；未选中时提示并返回空字符串
+// 获取当前选中的设备序列号；未选中时提示并返回空字符串。
+// 状态真相是 currentSerial 变量（复合框输入框可能正被用来输入新 IP，
+// 不能作为当前设备的凭据）
 function requireDevice() {
-    const serial = $("device-select").value;
-    if (!serial) {
-        pushOutput("⚠️ 请先在「设备连接」的下拉框中选择一台设备。");
+    if (!currentSerial) {
+        pushOutput("⚠️ 请先在「设备连接」中选择或连接一台设备。");
         return "";
     }
-    return serial;
+    return currentSerial;
 }
 
 // 统一调用 Go 绑定方法，捕获成功/失败，返回 { ok, result, err }
@@ -84,33 +85,39 @@ async function run(promise) {
 }
 
 /* ---------------------------------------------------------------------------
- * 设备连接（后台自动刷新 + TCP 连接 / 断开 + 查看设备列表弹窗）
+ * 设备连接（V1.0.2 地址复合框：输入 IP 连接 / 展开浮层选择设备 二合一）
  *
- * 刷新机制说明（修复旧版"点击下拉框刷新"的缺陷）：
- * 旧版在下拉框 mousedown 时触发异步刷新，等 adb devices 返回后重建选项；
- * 但此时下拉弹窗往往已经展开 —— 修改选项会让弹窗立即收起（表现为
- * "点开就闪退、要点第二次才能选"），且清空选项的瞬间选中值丢失。
- * 现改为：
+ * 状态真相：currentSerial 变量持有当前目标设备；复合框输入框只是
+ * 展示/输入入口——用户在框里输入新 IP 期间不清除当前设备
+ * （requireDevice 仍返回旧设备），连接成功或浮层选择后才切换。
+ *
+ * 浮层刷新机制（沿用原下拉框的防抖设计）：
  *   1. 后台每 3 秒轮询一次（adb devices 开销小，桌面场景无压力）
  *   2. 窗口重新获得焦点时立即刷新（用户可能在窗口失焦期间插拔了设备）
  *   3. 列表内容（序列号+状态）与上次一致时完全不碰 DOM，
- *      从根本上避免"下拉弹窗被刷新关掉"与选中值被瞬时清空
+ *      避免打断用户正在进行的浮层点选
  * ------------------------------------------------------------------------ */
 
+// 当前目标设备序列号（"" = 未选择）。所有依赖设备的操作以此为凭据
+let currentSerial = "";
+
 // 设备列表缓存：最近一次成功获取到的设备列表。
-// 用途：后台轮询时对比增删设备、弹窗「选为当前设备」时同步下拉框
+// 用途：后台轮询时对比增删设备、复合框状态灯取色
 let deviceCache = [];
 
-// 下拉框最近一次渲染的列表签名（"serial|state" 以 ";" 拼接）。
+// 浮层列表最近一次渲染的签名（"serial|state" 以 ";" 拼接）。
 // 签名相同 = 列表内容没变 = 跳过 DOM 重建
-let deviceSelectSignature = "";
+let devicePopSignature = "";
 
 // 刷新并发保护：true 表示一次刷新正在进行中。
-// 防止轮询、手动刷新、连接后刷新等多个来源交错执行导致下拉框闪烁
+// 防止轮询、手动刷新、连接后刷新等多个来源交错执行导致浮层闪烁
 let deviceRefreshing = false;
 
 // 后台自动轮询间隔（毫秒）
 const DEVICE_POLL_INTERVAL = 3000;
+
+// 录屏计时轮询间隔（毫秒）：mm:ss 计时按秒跳动，1 秒轮询一次
+const REC_POLL_INTERVAL = 1000;
 
 // 生成设备列表的签名：内容相同则签名相同，用于判断是否需要重建下拉框。
 // 前缀设备数量：空列表的签名应为 "0:" 而不是 ""，
@@ -120,60 +127,77 @@ function deviceListSignature(devices) {
         + devices.map(function (d) { return d.serial + "|" + d.state; }).join(";");
 }
 
-// 把设备列表渲染到下拉框。核心原则：内容没变不动 DOM。
+// 把设备列表渲染到复合框浮层。核心原则：内容没变不动 DOM。
 // 入参: devices 设备数组（[{serial, state}, ...]）
-// 返回: selectionLost —— 原选中的设备是否已从列表中消失（调用方据此做联动清理）
-function renderDeviceSelect(devices) {
-    const select = $("device-select");
+// 返回: selectionLost —— 当前选中的设备是否已从列表中消失（调用方据此做联动清理）
+function renderDevicePop(devices) {
     const signature = deviceListSignature(devices);
-    if (signature === deviceSelectSignature) {
-        return false; // 列表无变化：不重建，避免打断用户操作下拉框
+    if (signature === devicePopSignature) {
+        return false; // 列表无变化：不重建，避免打断用户正在浮层上的点选
     }
-    deviceSelectSignature = signature;
+    devicePopSignature = signature;
 
-    const previous = select.value; // 记录当前选中项，重建后尽量恢复
-    select.innerHTML = "";
+    const stillThere = currentSerial !== ""
+        && devices.some(function (d) { return d.serial === currentSerial; });
 
-    // 判断原选中项是否仍在列表中
-    const stillThere = previous !== ""
-        && devices.some(function (d) { return d.serial === previous; });
+    const listEl = $("device-pop-list");
+    listEl.innerHTML = "";
 
-    // 占位符出现的两种情况（都保持"未选中"状态）：
-    // 1) 没有任何设备；2) 原选中设备已断开（避免静默跳到别的设备造成误操作）
-    let placeholderText = "";
+    // 无设备：占位说明（保持空列表，不自动选中任何设备）
     if (devices.length === 0) {
-        placeholderText = "（暂无设备，请确认已连接）";
-    } else if (!stillThere && previous !== "") {
-        placeholderText = "（原选中设备已断开，请重新选择）";
-    }
-    if (placeholderText !== "") {
-        const ph = document.createElement("option");
-        ph.value = "";
-        ph.textContent = placeholderText;
-        select.appendChild(ph);
+        const empty = document.createElement("div");
+        empty.className = "combo-empty";
+        empty.textContent = "暂无设备：USB 插上即出现；TCP 请输入 IP 点「连接」";
+        listEl.appendChild(empty);
     }
 
-    // 逐台设备生成下拉选项
+    // 逐台设备生成浮层选项行
     devices.forEach(function (dev) {
-        const opt = document.createElement("option");
-        opt.value = dev.serial;
-        opt.textContent = dev.serial + "（" + dev.state + "）";
-        select.appendChild(opt);
+        const opt = document.createElement("div");
+        opt.className = "combo-opt" + (dev.serial === currentSerial ? " combo-opt-sel" : "");
+        opt.dataset.action = "pick";
+        opt.dataset.serial = dev.serial;
+
+        // 状态灯（绿=可用 / 灰=离线 / 黄=未授权，复用弹窗的样式与映射）
+        const dot = document.createElement("span");
+        dot.className = deviceDotClass(dev.state);
+        dot.title = dev.state;
+        opt.appendChild(dot);
+
+        // 序列号（等宽字体，超长省略，悬停全名）
+        const serialEl = document.createElement("span");
+        serialEl.className = "combo-serial";
+        serialEl.textContent = dev.serial;
+        serialEl.title = dev.serial;
+        opt.appendChild(serialEl);
+
+        // 连接方式徽标（从序列号轻量推断，不跑 getprop——详情走「查看设备与历史」）
+        const tp = document.createElement("span");
+        tp.className = "device-transport";
+        tp.textContent = transportOfSerial(dev.serial);
+        opt.appendChild(tp);
+
+        // 状态中文说明
+        const st = document.createElement("span");
+        st.className = "combo-state";
+        st.textContent = deviceStateText(dev.state);
+        opt.appendChild(st);
+
+        listEl.appendChild(opt);
     });
 
-    // 恢复选中状态：
-    // - 原选中仍在 → 恢复；
-    // - 原选中消失 → 保持未选中（值为 ""，后续操作会提示先选设备）；
-    // - 从未选过   → 浏览器默认选中第一台（首次加载的便捷行为）
-    if (stillThere) {
-        select.value = previous;
-        return false;
+    return currentSerial !== "" && !stillThere; // 选中丢失，需调用方联动清理
+}
+
+// 从序列号轻量推断连接方式（供浮层徽标展示；完整属性查询走设备详情弹窗）
+function transportOfSerial(serial) {
+    if (serial.indexOf(":") >= 0) {
+        return "TCP";
     }
-    if (previous !== "") {
-        select.value = "";
-        return true; // 选中丢失，需要调用方做联动清理
+    if (serial.indexOf("emulator-") === 0) {
+        return "模拟器";
     }
-    return false;
+    return "USB";
 }
 
 // 对比刷新前后的设备列表，把接入/断开的设备输出到底部反馈栏。
@@ -210,27 +234,30 @@ async function refreshDevices(userInitiated) {
             if (userInitiated) {
                 pushOutput("❌ 获取设备列表失败：" + res.err);
             }
-            if (deviceSelectSignature === "") {
-                const select = $("device-select");
-                select.innerHTML = "";
-                const opt = document.createElement("option");
-                opt.value = "";
-                opt.textContent = "（获取设备失败，请点击「刷新设备」重试）";
-                select.appendChild(opt);
+            if (devicePopSignature === "") {
+                const listEl = $("device-pop-list");
+                listEl.innerHTML = "";
+                const err = document.createElement("div");
+                err.className = "combo-empty";
+                err.textContent = "获取设备失败，请点「刷新设备」重试";
+                listEl.appendChild(err);
             }
             return;
         }
 
         const devices = res.result || [];
         const before = deviceCache;
-        const selectionLost = renderDeviceSelect(devices);
+        const selectionLost = renderDevicePop(devices);
         deviceCache = devices;
 
-        // 选中设备已断开：联动清理（停日志抓取、清应用列表），保证界面状态一致。
-        // 正常情况下 change 事件不会对程序化改动触发，必须在这里显式处理
+        // 选中设备已断开：联动清理（清选择、停日志抓取、清应用列表），
+        // 保证界面状态一致（程序化改动不触发任何事件，必须在这里显式处理）
         if (selectionLost) {
-            await resetDeviceDependentUI();
-            pushOutput("⚠️ 原选中的设备已断开，请重新选择目标设备。");
+            await onDeviceChanged("");
+            pushOutput("⚠️ 当前设备已断开，请重新选择目标设备。");
+        } else if (currentSerial !== "") {
+            // 设备仍在列表：状态可能变化（device↔offline），同步状态灯颜色
+            updateComboDot(currentSerial);
         }
 
         if (userInitiated) {
@@ -261,32 +288,113 @@ function startDevicePolling() {
     });
 }
 
-// 组装连接地址：IP 必填；端口留空时由 Go 侧补默认 5555
+// 组装连接地址：复合框内容为 IP 或 ip:port（端口留空时由 Go 侧补默认 5555）
 function buildConnectAddress() {
-    const ip = $("connect-ip").value.trim();
-    if (!ip) {
-        pushOutput("⚠️ 请输入设备 IP 地址。");
+    const raw = $("device-combo-input").value.trim();
+    if (!raw) {
+        pushOutput("⚠️ 请输入设备 IP 地址，或点 ▼ 选择已连接的设备。");
         return "";
     }
-    const port = $("connect-port").value.trim();
-    // 端口留空 → 只传 IP，Go 侧自动补 5555；填了则拼 "ip:port"
-    return port ? ip + ":" + port : ip;
+    return raw;
 }
 
-// 连接 TCP 设备：adb connect <ip:port>，成功后自动刷新设备列表
+// 回滚设备选择到 prev（切换确认被取消时用）：恢复复合框显示与内部状态，
+// 并强制重建浮层让「当前设备」高亮复位
+function restoreDeviceSelection(prev) {
+    currentSerial = prev;
+    const combo = $("device-combo");
+    if (prev) {
+        $("device-combo-input").value = prev;
+        combo.classList.add("has-device");
+        updateComboDot(prev);
+    } else {
+        $("device-combo-input").value = "";
+        combo.classList.remove("has-device");
+        $("device-combo-dot").className = "combo-dot";
+    }
+    renderDevicePop(deviceCache);
+}
+
+// 连接 TCP 设备：adb connect <ip:port>，成功后刷新列表并自动选为新目标设备
 async function doConnect() {
     const address = buildConnectAddress();
     if (!address) return;
 
+    const btn = $("btn-connect");
+    btn.disabled = true; // 防连点
     pushOutput("正在连接设备：" + address + " …");
     const res = await run(window.go.main.App.Connect(address));
+    btn.disabled = false;
     if (!res.ok) {
         pushOutput("❌ 连接失败：" + res.err);
         return;
     }
-    // 无论新连接还是已连接，都刷新列表让设备出现在下拉框
-    await refreshDevices(true);
-    pushOutput("✅ " + res.result);
+    // 刷新列表让新设备出现；await 前抢一次引用，防后台轮询并发时被 guard 跳过
+    await refreshDevices(false);
+    if (deviceCache.length === 0) {
+        // 并发轮询吞掉了本次刷新（deviceRefreshing guard）：稍候重试一次
+        await new Promise(function (r) { setTimeout(r, 500); });
+        await refreshDevices(false);
+    }
+    // 自动选中：用户可能只输 IP（无端口），列表中的规范 serial 带 :5555，
+    // 按两种形式在最新列表里查找；仍找不到时仅展示连接结果不打扰
+    const canonical = deviceCache.some(function (d) { return d.serial === address; })
+        ? address
+        : (deviceCache.find(function (d) { return d.serial.split(":")[0] === address.split(":")[0]; }) || {}).serial;
+    if (canonical) {
+        await onDeviceChanged(canonical);
+        pushOutput("✅ " + res.result + "（已自动选为当前设备）");
+    } else {
+        pushOutput("✅ " + res.result + "（设备已出现在 ▼ 列表，点选即可设为当前设备）");
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * 复合框浮层交互：开合 / 外点关闭 / 行点选 / 清除选择 / 状态灯取色
+ * ------------------------------------------------------------------------ */
+
+// 开合设备浮层（▼ 按钮调用；打开时立即刷一次列表，展开即最新）
+function toggleDevicePop() {
+    const combo = $("device-combo");
+    const willOpen = !combo.classList.contains("combo-open");
+    combo.classList.toggle("combo-open", willOpen);
+    if (willOpen) {
+        refreshDevices(false);
+        $("device-combo-input").focus();
+    }
+}
+
+// 关闭设备浮层（选择/清除/外点时调用，幂等）
+function closeDevicePop() {
+    $("device-combo").classList.remove("combo-open");
+}
+
+// 按最新列表同步复合框状态灯颜色（绿=可用 / 灰=离线 / 黄=未授权）
+function updateComboDot(serial) {
+    const dot = $("device-combo-dot");
+    dot.className = "combo-dot"; // 先复位为默认（绿）
+    const dev = deviceCache.find(function (d) { return d.serial === serial; });
+    if (dev && dev.state === "offline") {
+        dot.classList.add("combo-dot-off");
+    } else if (dev && dev.state !== "device") {
+        dot.classList.add("combo-dot-warn");
+    }
+}
+
+// 浮层列表行点击分发（事件委托：行上 data-serial 携带序列号）。
+// 用 closest 定位行——行内子元素（序列号/徽标/状态文字）铺满整行，
+// 直接读 event.target.dataset 会拿到 undefined 导致点击无效
+function onDevicePopClick(event) {
+    const row = event.target.closest(".combo-opt");
+    const serial = row ? row.dataset.serial : "";
+    if (!serial) {
+        return; // 点的不是设备行（如空态占位文字）
+    }
+    if (serial === currentSerial) {
+        closeDevicePop(); // 已是当前设备：仅收起浮层
+        return;
+    }
+    onDeviceChanged(serial);
 }
 
 /* ---------------------------------------------------------------------------
@@ -545,27 +653,25 @@ async function reconnectFromHistory(serial) {
 }
 
 // 从弹窗把某台设备设为当前目标设备：
-// 用弹窗刚取到的数据同步下拉框 → 选中该设备 → 触发与手动切换相同的联动逻辑
+// 用弹窗刚取到的数据同步浮层 → 走统一切换入口（同步复合框 + 联动清理）
 function pickDeviceFromModal(serial) {
-    // 先把弹窗数据渲染进下拉框（若列表有变化会重建，没有变化则跳过）
-    renderDeviceSelect(deviceModalCache.map(function (d) {
+    // 先把弹窗数据渲染进浮层（若列表有变化会重建，没有变化则跳过）
+    renderDevicePop(deviceModalCache.map(function (d) {
         return { serial: d.serial, state: d.state };
     }));
     deviceCache = deviceModalCache.map(function (d) {
         return { serial: d.serial, state: d.state };
     });
 
-    // 选中目标设备。若瞬间设备又掉线导致选项不存在，明确提示
-    const select = $("device-select");
-    select.value = serial;
-    if (select.value !== serial) {
+    // 目标设备已不在列表中（瞬间又掉线）：明确提示
+    if (!deviceCache.some(function (d) { return d.serial === serial; })) {
         pushOutput("⚠️ 设备 " + serial + " 已不可用，请刷新后重试。");
         return;
     }
 
     closeDeviceModal();
-    // 复用手动切换设备的联动逻辑（停日志抓取、清应用列表 + 提示）
-    onDeviceChanged();
+    // 复用统一切换入口（同步复合框显示 + 停日志抓取、清应用列表 + 提示）
+    onDeviceChanged(serial);
 }
 
 // 从弹窗断开一台 TCP 设备，然后刷新弹窗列表与主界面下拉框
@@ -892,18 +998,26 @@ function startRecPolling() {
                 $("rec-time").textContent = fmtRecTime(st.elapsed);
             } else {
                 // 非录制态（正常停止由 doStopRecord 处理；这里兜底处理
-                // 设备端自动结束/异常退出场景）：复位按钮并提示
+                // 设备端自动结束/异常退出场景）：等会话走出 stopping（回传中）
+                // 后按最终态提示——finished 报保存路径，error 报原因
+                if (st.phase === "stopping") {
+                    return; // 自动回传进行中，下一 tick 再查
+                }
                 stopRecPolling();
                 if (recActive) {
                     setRecUIState(false, 0);
-                    pushOutput("ℹ️ 录屏已结束（可能达到 3 分钟上限或设备异常），视频已自动回传保存，路径见上方反馈。");
+                    if (st.phase === "error") {
+                        pushOutput("❌ 录屏异常结束：" + (st.phaseDetail || "原因未知，请重试"));
+                    } else {
+                        pushOutput("✅ 已达最长时长（3 分钟），录屏自动停止并保存。");
+                    }
                 }
             }
         } catch (err) {
             // 单次轮询失败（桥接瞬时抖动等）不终止轮询，下次 tick 重试；
             // 连续失败时 App 层已不可用，属应用退出场景，轮询随页面销毁自然结束
         }
-    }, 1000);
+    }, REC_POLL_INTERVAL);
 }
 
 // 停止计时轮询
@@ -981,53 +1095,26 @@ async function doPush() {
  * 文件 / 目录选择（调用 Go 侧的系统对话框）
  * ------------------------------------------------------------------------ */
 
-// 选择 APK 文件，回填到 apk-path 输入框
-async function pickApkFile() {
-    const res = await run(window.go.main.App.SelectFile());
-    if (res.ok && res.result) {
-        $("apk-path").value = res.result;
-    }
+// 「选文件/选目录后回填到输入框」的共用工厂：系统对话框选择结果写入指定输入框。
+// 入参: binding 二选一 —— SelectFile / SelectDirectory 的绑定调用包装；
+//       inputId 目标输入框 id
+// 返回: 可直接作为按钮事件处理器的 async 函数
+function makePicker(binding, inputId) {
+    return async function () {
+        const res = await run(binding());
+        if (res.ok && res.result) {
+            $(inputId).value = res.result;
+        }
+    };
 }
 
-// 选择截图保存目录，回填到 shot-dir 输入框（留空 = 默认 screenshots/）
-async function pickShotDir() {
-    const res = await run(window.go.main.App.SelectDirectory());
-    if (res.ok && res.result) {
-        $("shot-dir").value = res.result;
-    }
-}
-
-// 选择录屏保存目录，回填到 rec-dir 输入框（留空 = 默认 videos/）
-async function pickRecDir() {
-    const res = await run(window.go.main.App.SelectDirectory());
-    if (res.ok && res.result) {
-        $("rec-dir").value = res.result;
-    }
-}
-
-// 选择 pull 本地目标目录
-async function pickPullDir() {
-    const res = await run(window.go.main.App.SelectDirectory());
-    if (res.ok && res.result) {
-        $("pull-dir").value = res.result;
-    }
-}
-
-// 选择 push 本地文件
-async function pickPushFile() {
-    const res = await run(window.go.main.App.SelectFile());
-    if (res.ok && res.result) {
-        $("push-file").value = res.result;
-    }
-}
-
-// 选择日志保存目录（留空 = 默认程序目录下 logs/）
-async function pickLogDir() {
-    const res = await run(window.go.main.App.SelectDirectory());
-    if (res.ok && res.result) {
-        $("log-dir").value = res.result;
-    }
-}
+// 各处选文件/选目录按钮：同一交互（对话框 → 回填输入框），仅目标输入框不同
+const pickApkFile = makePicker(function () { return window.go.main.App.SelectFile(); }, "apk-path");
+const pickShotDir = makePicker(function () { return window.go.main.App.SelectDirectory(); }, "shot-dir");
+const pickRecDir = makePicker(function () { return window.go.main.App.SelectDirectory(); }, "rec-dir");
+const pickPullDir = makePicker(function () { return window.go.main.App.SelectDirectory(); }, "pull-dir");
+const pickPushFile = makePicker(function () { return window.go.main.App.SelectFile(); }, "push-file");
+const pickLogDir = makePicker(function () { return window.go.main.App.SelectDirectory(); }, "log-dir");
 
 /* ---------------------------------------------------------------------------
  * 日志抓取（一键开始 / 结束，无实时终端）
@@ -1459,8 +1546,7 @@ async function setPanelMode(mode) {
         // 实时日志：需要大窗口 → 默认档时自动升到最大；
         // 需要设备；无设备退回操作反馈模式
         autoExpandPanelForMode();
-        const serial = $("device-select").value;
-        if (!serial) {
+        if (!currentSerial) {
             pushOutput("⚠️ 实时日志需要先在「设备连接」中选择一台设备。");
             await setPanelMode("feedback");
             return;
@@ -1803,17 +1889,61 @@ async function resetDeviceDependentUI() {
     $("pkg-third-only").checked = false;
 }
 
-async function onDeviceChanged() {
-    const serial = $("device-select").value;
-    if (!serial) {
-        return; // 空选项（如"暂无设备"）不触发
+// 设备切换/清除的统一入口（浮层点选 / 弹窗选择 / 连接成功自动选中 /
+// 断开清理 四处复用）。
+// 入参: newSerial 新目标设备序列号；"" = 清除当前选择
+// 职责: 同步复合框显示（输入框内容/×按钮/状态灯）+ 设备真正变化时联动清理
+async function onDeviceChanged(newSerial) {
+    const prev = currentSerial;
+
+    // 录制中切换设备：二次确认（需求 3.3「切换设备 → 弹窗确认『停止当前录屏并切换？』」）。
+    // 取消则回滚选择（保持原设备），不打断录制。
+    if (prev && prev !== newSerial && recActive) {
+        const confirmed = await showConfirm(
+            "切换设备",
+            "正在录制中。切换目标设备将停止当前录屏（本机回传已录内容），确认切换？",
+            "停止录屏并切换"
+        );
+        if (!confirmed) {
+            restoreDeviceSelection(prev);
+            pushOutput("ℹ️ 已取消切换，继续在设备 " + prev + " 上录制。");
+            return;
+        }
     }
 
-    // 清理旧设备的关联数据，保证界面状态与当前选中设备一致
-    await resetDeviceDependentUI();
+    currentSerial = newSerial;
 
-    // 反馈提示，让用户明确当前操作对象已切换
-    pushOutput("ℹ️ 已切换目标设备：" + serial + "（应用列表已重置，请重新查询）");
+    // 同步复合框显示（选中态：框内显示序列号 + 状态灯 + ×；清除态全部复位）
+    const combo = $("device-combo");
+    if (newSerial) {
+        $("device-combo-input").value = newSerial;
+        combo.classList.add("has-device");
+        updateComboDot(newSerial);
+    } else {
+        $("device-combo-input").value = "";
+        combo.classList.remove("has-device");
+        $("device-combo-dot").className = "combo-dot"; // 复位状态灯颜色（隐藏由 has-device 控制）
+    }
+    closeDevicePop();
+
+    // 选中变化后重渲浮层列表：让 combo-opt-sel「当前设备」高亮跟着走
+    // （renderDevicePop 的签名比对只看列表内容，不含选中态；选中变了必须强制重建）
+    if (prev !== newSerial) {
+        renderDevicePop(deviceCache);
+    }
+
+    // 之前有设备且发生了变化（切换或清除）：清理旧设备关联数据
+    // （停会话、清应用列表），保证界面状态与新目标一致；首次选择无旧数据可清
+    if (prev && prev !== newSerial) {
+        await resetDeviceDependentUI();
+        if (newSerial) {
+            pushOutput("ℹ️ 已切换目标设备：" + newSerial + "（应用列表已重置，请重新查询）");
+        }
+    } else if (newSerial && !prev) {
+        pushOutput("ℹ️ 当前目标设备：" + newSerial);
+    } else if (!newSerial && prev) {
+        pushOutput("ℹ️ 已清除当前设备选择；进行中的会话已停止，可重新选择设备。");
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -1902,8 +2032,29 @@ function init() {
         refreshDevices(true);
     });
 
-    // ---- 设备连接 ----
+    // ---- 设备连接（V1.0.2 地址复合框）----
     $("btn-connect").addEventListener("click", doConnect);
+    // ▼ 开合设备浮层（打开时立即刷一次列表，展开即最新）
+    $("device-combo-toggle").addEventListener("click", toggleDevicePop);
+    // × 清除当前选择（统一入口：联动停会话、清应用列表）
+    $("device-combo-clear").addEventListener("click", function () {
+        onDeviceChanged("");
+    });
+    // 输入框回车 = 连接（与「连接」按钮一致）
+    $("device-combo-input").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+            doConnect();
+            e.preventDefault();
+        }
+    });
+    // 浮层设备行：事件委托统一分发（点选 = 设为当前设备，统一切换入口）
+    $("device-pop-list").addEventListener("click", onDevicePopClick);
+    // 点击浮层外任意位置关闭浮层（combo 内部元素不含在内）
+    document.addEventListener("click", function (e) {
+        if (!$("device-combo").contains(e.target)) {
+            closeDevicePop();
+        }
+    });
     // 「查看设备列表」弹窗：完整设备信息（连接方式/状态/型号/安卓版本）
     $("btn-view-devices").addEventListener("click", openDeviceModal);
     // 弹窗内：刷新按钮重新拉取，关闭按钮收起；列表行内按钮事件委托分发
@@ -1912,12 +2063,6 @@ function init() {
     $("device-modal-list").addEventListener("click", onDeviceModalClick);
     // 历史区与当前设备列表是两个容器，「重新连接」按钮也要走同一套事件委托
     $("device-history-list").addEventListener("click", onDeviceModalClick);
-
-    // 注意：设备下拉框不再挂 mousedown 自动刷新 ——
-    // 旧实现会在下拉展开期间异步重建选项，导致弹窗被收起、选中值丢失；
-    // 现在列表由后台轮询保持最新，展开即可看到当前设备
-    // 切换目标设备时联动刷新：停日志抓取、清空应用列表、恢复默认状态
-    $("device-select").addEventListener("change", onDeviceChanged);
 
     // ---- 应用管理 ----
     $("btn-packages").addEventListener("click", queryApps);

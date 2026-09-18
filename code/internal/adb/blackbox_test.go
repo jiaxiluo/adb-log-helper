@@ -10,7 +10,6 @@ package adb
 // ============================================================================
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -118,14 +117,6 @@ func TestBlackboxRecordSessionE2E(t *testing.T) {
 
 	t.Setenv("STUB_OUT", argsFile)
 	t.Setenv("STUB_FILE", stubFile)
-	if err := os.Setenv("STUB_OUT", argsFile); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Setenv("STUB_FILE", stubFile); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Unsetenv("STUB_OUT")
-	defer os.Unsetenv("STUB_FILE")
 
 	// 用生产 spawner（真实子进程）+ 真实 runner（子进程经 stub adb）：
 	// NewRecordSession 默认即是生产实现，直接使用
@@ -144,13 +135,9 @@ func TestBlackboxRecordSessionE2E(t *testing.T) {
 		t.Fatal("Stop 不应失败:", err)
 	}
 
-	// 产物校验：本地文件存在、带 ftyp 头、位于保存目录
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal("回传的视频文件应存在:", err)
-	}
-	if !bytes.Contains(data[:16], []byte("ftyp")) {
-		t.Fatal("回传文件应含 ftyp 头（stub 生成的伪 mp4）")
+	// 产物校验：本地文件存在、带 ftyp 头（复用生产校验逻辑）、位于保存目录
+	if ok, err := validateMp4Header(path); err != nil || !ok {
+		t.Fatal("回传文件应通过生产 mp4 头校验（stub 生成的伪 mp4）:", err)
 	}
 	if filepath.Dir(path) != saveDir {
 		t.Fatalf("视频应保存在指定目录: %s（期望 %s）", path, saveDir)

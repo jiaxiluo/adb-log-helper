@@ -82,31 +82,44 @@
             <!-- ========== 左列：设备连接 / 屏幕采集 / 文件传输 ========== -->
             <div class="col-left">
 
-                <!-- 左列·上：设备连接 -->
+                <!-- 左列·上：设备连接（V1.0.2 地址复合框：输入 IP 连接 / 展开选择设备 二合一） -->
                 <section class="card">
                     <div class="card-title">
                         <h2>设备连接</h2>
-                        <span class="hint">USB 即插即用；TCP 先输 IP</span>
+                        <span class="hint">输入 IP 连接，或展开选择已连设备</span>
                     </div>
-                    <!-- TCP/IP 连接：连接成功后设备自动出现在下方下拉框 -->
+                    <!-- 设备地址复合框：手输 IP[:port] 点「连接」/回车；点 ▼ 展开设备浮层点选。
+                         浮层列表由后台自动刷新（3 秒轮询 + 窗口聚焦即刷新），展开即最新 -->
                     <div class="row">
-                        <input id="connect-ip" class="input" type="text" placeholder="设备 IP，如 192.168.1.100">
-                        <input id="connect-port" class="input port-input" type="text" placeholder="端口，默认 5555">
-                    </div>
-                    <div class="row">
+                        <div class="combo" id="device-combo">
+                            <div class="combo-box" id="device-combo-box">
+                                <!-- 当前设备状态灯（选中设备后显示，颜色随状态） -->
+                                <span id="device-combo-dot" class="combo-dot"></span>
+                                <input id="device-combo-input" class="combo-input" type="text" spellcheck="false"
+                                       placeholder="输入设备 IP（如 192.168.1.100，可带 :5555），或点 ▼ 选择已连设备">
+                                <!-- × 清除当前选择（选中设备后由 has-device 类控制显示） -->
+                                <button id="device-combo-clear" class="combo-clear" title="清除当前选择">×</button>
+                                <!-- ▼ 展开/收起设备浮层 -->
+                                <button id="device-combo-toggle" class="combo-toggle" title="已连接设备列表">▼</button>
+                                <!-- 浮层设备列表：状态灯+序列号+连接方式+状态，由 JS 动态渲染；
+                                     点击行 = 设为当前设备（事件委托） -->
+                                <div class="combo-pop" id="device-pop">
+                                    <div class="combo-pop-head">
+                                        <span>已连接设备（每 3 秒自动刷新）</span>
+                                        <span>点选设为当前设备</span>
+                                    </div>
+                                    <div id="device-pop-list" class="combo-pop-list"></div>
+                                    <div class="combo-pop-foot">USB 设备插上即出现在此列表；TCP 设备需先连接</div>
+                                </div>
+                            </div>
+                        </div>
                         <button id="btn-connect" class="btn btn-success">连接</button>
+                    </div>
+                    <div class="row">
                         <button id="btn-refresh-devices" class="btn btn-primary">刷新设备</button>
                         <!-- 完整设备信息弹窗：连接方式/状态/型号/安卓版本 + 最近断开的历史设备 -->
                         <button id="btn-view-devices" class="btn">查看设备与历史</button>
-                    </div>
-                    <!-- 设备下拉框：列表由后台自动刷新（3 秒轮询 + 窗口聚焦即刷新），
-                         展开即可看到最新设备，无需先手动刷新 -->
-                    <select id="device-select" class="select select-wide">
-                        <option value="">（设备列表自动保持最新，点击选择设备）</option>
-                    </select>
-                    <div class="hint" style="margin-top:6px">
-                        列表每 3 秒自动刷新，插拔设备后点一下窗口即可立即刷新；<br>
-                        device=可用 / offline=离线 / unauthorized=需允许调试；TCP 需设备端已执行 adb tcpip 5555
+                        <span class="hint">端口缺省 5555；device=可用 / offline=离线 / unauthorized=需允许调试</span>
                     </div>
                 </section>
 

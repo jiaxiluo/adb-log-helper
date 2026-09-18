@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<!-- ============================================================
+  ADB 工具 V1.0.2 设计稿：设备连接卡「地址框合并」方案
+  打开方式：浏览器直接打开本文件
+  · 诉求：v5 布局下设备下拉框展示不全 → 把 IP 输入框与设备
+    下拉框合并为一个「可输入复合下拉框」
+  · 可交互演示：
+      - 点地址框右侧 ▼ → 展开设备浮层（状态灯/序列号/状态/连接方式）
+      - 点浮层中的设备 → 选为当前设备（框内显示序列号 + × 清除）
+      - 输入框手输 IP → 点「连接」或回车 → 模拟连接成功自动选中
+  · 上方可切「v5 现状」对比（重现下拉框截断/展示不全）
+============================================================ -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ADB 工具 · 设备地址框合并设计稿</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+    --bg: #f4f6f9; --card: #ffffff; --border: #e5e9f0;
+    --primary: #2563eb; --success: #16a34a; --danger: #dc2626;
+    --text: #1f2937; --text-muted: #6b7280; --radius: 10px;
+}
+body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #dfe4ec; color: var(--text);
+    font-size: 14px; line-height: 1.5; padding: 16px 20px;
+}
+/* ===== 原型页说明框架 ===== */
+.proto-header { max-width: 660px; margin: 0 auto 10px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.proto-header h1 { font-size: 18px; }
+.proto-tabs { display: flex; gap: 8px; }
+.proto-tab {
+    padding: 7px 18px; border-radius: 999px; border: 1px solid #c3cbd8;
+    background: #fff; cursor: pointer; font-size: 13px; color: var(--text-muted);
+}
+.proto-tab.active { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.proto-note { max-width: 660px; margin: 0 auto 12px; font-size: 12.5px; color: #4b5563;
+    background: #fff8e6; border: 1px solid #f2e3b3; border-radius: 8px; padding: 8px 14px;
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.proto-note b { color: #92600a; }
+
+/* ===== 模拟窗口画布（按真实窗口 1180 等比缩至 660，左列卡片为焦点） ===== */
+.window {
+    width: 660px; margin: 0 auto; background: var(--bg);
+    border: 1px solid #c3cbd8; border-radius: 12px;
+    padding: 12px; box-shadow: 0 8px 30px rgba(30,41,59,.12);
+}
+.win-title { font-size: 15px; font-weight: 700; padding: 4px 4px 10px; display: flex; gap: 10px; align-items: center; }
+.badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; background: #dcfce7; color: #15803d; }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; }
+.card-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.card-title h2 { font-size: 15px; font-weight: 600; }
+.hint { color: var(--text-muted); font-size: 12px; }
+
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.row:last-child { margin-bottom: 0; }
+.btn {
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-success { background: var(--success); border-color: var(--success); color: #fff; }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ===== 核心：设备地址复合框 ===== */
+.combo { position: relative; flex: 1; min-width: 0; }
+.combo-box {
+    display: flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; padding: 0 4px 0 0; cursor: text;
+    transition: border-color .15s;
+}
+.combo-box:focus-within, .combo-box.combo-open { border-color: var(--primary); }
+/* 当前设备状态灯（未选设备时隐藏） */
+.combo-dot { width: 9px; height: 9px; border-radius: 50%; background: #16a34a; margin-left: 10px; flex-shrink: 0; display: none; }
+.combo.has-device .combo-dot { display: block; }
+.combo-input {
+    flex: 1; border: none; outline: none; padding: 8px 8px;
+    font-size: 13px; color: var(--text); min-width: 0; background: transparent;
+    font-family: Consolas, "Courier New", monospace;
+}
+.combo-input::placeholder { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: #9ca3af; }
+/* × 清除按钮（选中设备后出现） */
+.combo-clear {
+    display: none; border: none; background: #eef2f7; color: var(--text-muted);
+    width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; flex-shrink: 0;
+}
+.combo.has-device .combo-clear { display: block; }
+/* ▼ 展开按钮 */
+.combo-toggle {
+    border: none; background: transparent; cursor: pointer;
+    padding: 8px 10px; color: var(--text-muted); font-size: 11px; flex-shrink: 0;
+    border-left: 1px solid var(--border);
+}
+.combo-toggle:hover { color: var(--primary); }
+
+/* 浮层设备列表 */
+.combo-pop {
+    display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(30,41,59,.18); z-index: 30; overflow: hidden;
+}
+.combo-open .combo-pop { display: block; }
+.combo-pop-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 12px; font-size: 12px; color: var(--text-muted);
+    border-bottom: 1px solid var(--border); background: #fafbfd;
+}
+.combo-opt {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; cursor: pointer; font-size: 13px;
+    border-bottom: 1px solid #f0f2f6;
+}
+.combo-opt:last-child { border-bottom: none; }
+.combo-opt:hover { background: #f1f5f9; }
+.combo-opt.sel { background: #eff6ff; }
+.combo-opt .serial { flex: 1; font-family: Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combo-opt .tp { font-size: 11px; color: #fff; background: #94a3b8; border-radius: 4px; padding: 1px 6px; }
+.combo-opt .tp.usb { background: #2563eb; }
+.combo-opt .st { font-size: 12px; color: var(--text-muted); }
+.combo-opt .st.ok { color: #15803d; }
+.combo-dot2 { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.dot-ok { background: #16a34a; } .dot-off { background: #9ca3af; } .dot-warn { background: #d97706; }
+.combo-pop-foot { padding: 6px 12px; font-size: 11.5px; color: var(--text-muted); background: #fafbfd; }
+
+/* 反馈演示区 */
+.fb { background: #0f172a; color: #d7e2f0; border-radius: 8px; padding: 10px 12px;
+      font-family: Consolas, monospace; font-size: 12px; min-height: 58px; white-space: pre-wrap; }
+
+/* ===== v5 现状（对比） ===== */
+.old-select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; color: var(--text); background: #fff;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
+}
+.old-cut { color: var(--danger); font-size: 12px; margin-top: 4px; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="proto-header">
+    <h1>设备地址框合并 · 设计稿</h1>
+    <div class="proto-tabs">
+        <button class="proto-tab active" id="tab-new" onclick="switchView('new')">合并方案</button>
+        <button class="proto-tab" id="tab-old" onclick="switchView('old')">v5 现状（bug 对比）</button>
+    </div>
+</div>
+<div class="proto-note">
+    <span><b>试试：</b>点地址框右侧 <b>▼</b> 展开设备列表并选择；或直接在框里<b>输入 IP 后点「连接」/回车</b>，模拟连接成功自动选中设备。</span>
+</div>
+
+<!-- ============================================================
+     视图一：合并方案
+============================================================ -->
+<div class="window" id="win-new">
+    <div class="win-title">ADB 工具 <span class="badge">ADB 已就绪</span></div>
+
+    <!-- 设备连接卡（合并后） -->
+    <section class="card">
+        <div class="card-title">
+            <h2>设备连接</h2>
+            <span class="hint">输入 IP 连接，或展开选择已连设备</span>
+        </div>
+
+        <!-- ★ 地址复合框：手输 IP / 下拉选设备，二合一（取代原 IP框+端口框+设备下拉框三件） -->
+        <div class="row">
+            <div class="combo" id="combo">
+                <div class="combo-box" id="combo-box">
+                    <span class="combo-dot" id="combo-dot"></span>
+                    <input class="combo-input" id="combo-input" type="text" spellcheck="false"
+                           placeholder="输入设备 IP（如 192.168.1.100，可带 :5555），或点 ▼ 选择已连设备"
+                           onkeydown="if(event.key==='Enter'){doConnect();}">
+                    <button class="combo-clear" id="combo-clear" title="清除当前选择" onclick="clearDevice()">×</button>
+                    <button class="combo-toggle" id="combo-toggle" onclick="togglePop(event)">▼</button>
+
+                    <!-- 浮层：设备列表（自动刷新保持最新；状态灯+序列号+状态+连接方式） -->
+                    <div class="combo-pop" id="combo-pop">
+                        <div class="combo-pop-head">
+                            <span>已连接设备（每 3 秒自动刷新）</span>
+                            <span>点选设为当前设备</span>
+                        </div>
+                        <div class="combo-opt" onclick="pickDevice('192.168.1.100:5555','device','TCP')">
+                            <span class="combo-dot2 dot-ok"></span>
+                            <span class="serial">192.168.1.100:5555</span>
+                            <span class="tp">TCP</span><span class="st ok">可用</span>
+                        </div>
+                        <div class="combo-opt" onclick="pickDevice('HWGNE17839201234','device','USB')">
+                            <span class="combo-dot2 dot-ok"></span>
+                            <span class="serial">HWGNE17839201234</span>
+                            <span class="tp usb">USB</span><span class="st ok">可用</span>
+                        </div>
+                        <div class="combo-opt" onclick="pickDevice('emulator-5554','offline','模拟器')">
+                            <span class="combo-dot2 dot-off"></span>
+                            <span class="serial">emulator-5554</span>
+                            <span class="tp">模拟器</span><span class="st">离线</span>
+                        </div>
+                        <div class="combo-pop-foot">USB 设备插上即出现在此列表；TCP 设备需先连接</div>
+                    </div>
+                </div>
+            </div>
+            <button class="btn btn-success" id="btn-connect" onclick="doConnect()">连接</button>
+        </div>
+
+        <div class="row">
+            <button class="btn btn-primary">刷新设备</button>
+            <button class="btn">查看设备与历史</button>
+            <span class="hint">端口缺省 5555；选中设备后所有操作作用于该设备</span>
+        </div>
+    </section>
+
+    <!-- 操作反馈演示 -->
+    <section class="card">
+        <div class="card-title"><h2>操作反馈</h2><span class="hint">交互演示输出区</span></div>
+        <div class="fb" id="fb">（点 ▼ 选设备 / 输入 IP 连接，反馈显示在这里）</div>
+    </section>
+</div>
+
+<!-- ============================================================
+     视图二：v5 现状（bug 重现）
+============================================================ -->
+<div class="window hidden" id="win-old">
+    <div class="win-title">ADB 工具 <span class="badge">ADB 已就绪</span></div>
+
+    <section class="card">
+        <div class="card-title">
+            <h2>设备连接</h2>
+            <span class="hint">USB 即插即用；TCP 先输 IP</span>
+        </div>
+        <div class="row">
+            <input class="combo-input" style="border:1px solid var(--border);border-radius:6px" value="192.168.1.100" readonly>
+            <span class="old-select" style="width:110px;flex:none;padding:7px 8px;text-align:center">5555</span>
+        </div>
+        <div class="row">
+            <button class="btn btn-success">连接</button>
+            <button class="btn btn-primary">刷新设备</button>
+            <button class="btn">查看设备与历史</button>
+        </div>
+        <div class="row">
+            <!-- 现状：原生 select，长序列号被截断、样式不可控 -->
+            <span class="old-select" id="old-select" title="192.168.1.100:5555（device）— 当前设备">192.168.1.100:5555（dev…</span>
+        </div>
+        <div class="old-cut">↑ 现状问题：三行控件占高 + 原生下拉框长序列号截断（Windows select 无省略号，直接截字）、无法显示状态灯/连接方式</div>
+    </section>
+
+    <section class="card">
+        <div class="card-title"><h2>说明</h2></div>
+        <div class="fb">现状设备连接卡共 3 行控件（IP+端口 / 按钮 / 设备下拉），
+合并方案压为 2 行，且下拉信息更丰富（状态灯、连接方式、完整序列号）。</div>
+    </section>
+</div>
+
+<script>
+// ===== 视图切换 =====
+function switchView(which) {
+    document.getElementById('win-new').classList.toggle('hidden', which !== 'new');
+    document.getElementById('win-old').classList.toggle('hidden', which !== 'old');
+    document.getElementById('tab-new').classList.toggle('active', which === 'new');
+    document.getElementById('tab-old').classList.toggle('active', which === 'old');
+}
+
+// ===== 浮层开合 =====
+function togglePop(e) {
+    e.stopPropagation();
+    var combo = document.getElementById('combo');
+    var box = document.getElementById('combo-box');
+    var open = combo.classList.toggle('combo-open');
+    box.classList.toggle('combo-open', open);
+    if (open) { document.getElementById('combo-input').focus(); }
+}
+// 点击浮层外关闭
+document.addEventListener('click', function (e) {
+    var combo = document.getElementById('combo');
+    if (!combo.contains(e.target)) {
+        combo.classList.remove('combo-open');
+        document.getElementById('combo-box').classList.remove('combo-open');
+    }
+});
+
+// ===== 选择设备 =====
+function pickDevice(serial, state, tp) {
+    setDevice(serial, state === 'device');
+    document.getElementById('combo-pop').parentElement.classList.remove('combo-open');
+    document.getElementById('combo').classList.remove('combo-open');
+    fbLog('✅ 已切换目标设备：' + serial + '（' + tp + '，' + (state === 'device' ? '可用' : state) + '）');
+}
+function setDevice(serial, ok) {
+    var combo = document.getElementById('combo');
+    var input = document.getElementById('combo-input');
+    var dot = document.getElementById('combo-dot');
+    input.value = serial;
+    combo.classList.add('has-device');
+    dot.className = 'combo-dot ' + (ok ? '' : 'dot-warn');
+}
+function clearDevice() {
+    var combo = document.getElementById('combo');
+    var input = document.getElementById('combo-input');
+    input.value = '';
+    combo.classList.remove('has-device');
+    fbLog('ℹ️ 已清除当前设备选择。');
+}
+
+// ===== 手输 IP 连接（模拟） =====
+function doConnect() {
+    var input = document.getElementById('combo-input');
+    var btn = document.getElementById('btn-connect');
+    var addr = input.value.trim();
+    if (!addr) { fbLog('⚠️ 请输入设备 IP，或点 ▼ 选择已连设备。'); return; }
+    if (addr.indexOf(':') < 0) { addr = addr + ':5555'; }
+    btn.disabled = true; btn.textContent = '连接中…';
+    fbLog('正在连接设备：' + addr + ' …');
+    setTimeout(function () {
+        btn.disabled = false; btn.textContent = '连接';
+        setDevice(addr, true);
+        fbLog('✅ connected to ' + addr + '\n✅ 已自动选为当前设备（新设备即出现在 ▼ 列表中）');
+    }, 900);
+}
+
+// ===== 反馈输出 =====
+function fbLog(text) {
+    var el = document.getElementById('fb');
+    var now = new Date();
+    var stamp = [now.getHours(), now.getMinutes(), now.getSeconds()]
+        .map(function (n) { return (n < 10 ? '0' : '') + n; }).join(':');
+    el.textContent = '[' + stamp + '] ' + text;
+}
+</script>
+</body>
+</html>
