@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<!-- ============================================================
+  ADB 工具 V1.0.1 UI 交互原型 v5（评审用，非实现代码）
+  打开方式：浏览器直接打开本文件（改过版直接 F5 刷新）
+  · 布局：左右两列 ——
+      左列（自上而下）：设备连接 → 屏幕采集 → 文件传输
+      右列（独占全高）：应用管理（列表占满 + 底部安装 APK）
+      下方：日志抓取（独立模块）→ 底部三模式面板（不变）
+  · 共用组件：屏幕采集卡 = [截图|录屏] 切换；文件传输卡 = [拉取|推送] 切换
+  · 点「开始录屏」演示录制态（红点+计时）+ 日志抓取互斥置灰
+  · 标注圆点可勾选隐藏
+============================================================ -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ADB 工具 V1.0.1 UI 交互原型 v5</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+    --bg: #f4f6f9; --card: #ffffff; --border: #e5e9f0;
+    --primary: #2563eb; --primary-hover: #1d4ed8;
+    --success: #16a34a; --danger: #dc2626;
+    --text: #1f2937; --text-muted: #6b7280; --radius: 10px;
+}
+body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #dfe4ec; color: var(--text);
+    font-size: 14px; line-height: 1.5; padding: 16px 20px;
+}
+/* ===== 原型页自身的说明框架（不属于应用界面） ===== */
+.proto-header { max-width: 1220px; margin: 0 auto 10px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.proto-header h1 { font-size: 18px; }
+.proto-tabs { display: flex; gap: 8px; }
+.proto-tab {
+    padding: 7px 18px; border-radius: 999px; border: 1px solid #c3cbd8;
+    background: #fff; cursor: pointer; font-size: 13px; color: var(--text-muted);
+}
+.proto-tab.active { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.proto-note { max-width: 1220px; margin: 0 auto 10px; font-size: 12.5px; color: #4b5563;
+    background: #fff8e6; border: 1px solid #f2e3b3; border-radius: 8px; padding: 8px 14px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.proto-note .legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.proto-note b { color: #92600a; }
+.badge-num {
+    display: inline-flex; width: 18px; height: 18px; border-radius: 50%;
+    background: #eab308; color: #fff; font-size: 11.5px; font-weight: 600;
+    align-items: center; justify-content: center; flex-shrink: 0; vertical-align: middle;
+}
+.proto-note .badge-num { width: 16px; height: 16px; font-size: 10.5px; }
+.toggle-label { display: flex; align-items: center; gap: 4px; cursor: pointer; color: #92600a; white-space: nowrap; }
+
+/* ===== 应用窗口画布 ===== */
+.window {
+    width: 1220px; margin: 0 auto; background: var(--bg);
+    border: 1px solid #c3cbd8; border-radius: 12px;
+    padding: 12px; box-shadow: 0 8px 30px rgba(30,41,59,.12);
+    display: flex; flex-direction: column; height: 830px; overflow: hidden;
+}
+.view { display: none; flex-direction: column; height: 100%; }
+.view.active { display: flex; }
+
+.header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-shrink: 0; }
+.title { font-size: 20px; font-weight: 700; }
+.badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; }
+.badge-ok { background: #dcfce7; color: #15803d; }
+
+.main-area { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; gap: 10px; }
+.main-area > .card { flex-shrink: 0; margin-bottom: 0; }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; }
+.card-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.card-title h2 { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.hint { color: var(--text-muted); font-size: 12px; }
+
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.row:last-child { margin-bottom: 0; }
+.input, .select {
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+    font-size: 13px; background: #fff; color: var(--text); flex: 1; min-width: 0;
+}
+.btn {
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-success { background: var(--success); border-color: var(--success); color: #fff; }
+.btn-danger  { background: var(--danger);  border-color: var(--danger);  color: #fff; }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.checkbox { font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+/* ===== 模式切换分段控件（共用组件核心） ===== */
+.seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg-btn {
+    border: none; background: #fff; color: var(--text-muted);
+    padding: 5px 14px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn.active { background: var(--primary); color: #fff; font-weight: 600; }
+
+/* ===== 主体：左列三卡 + 右列应用管理独占全高 ===== */
+.main-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 1; min-height: 0; }
+
+/* 左列：设备连接 / 屏幕采集 / 文件传输 三张卡均分列高 */
+.col-left { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.col-left .card { flex: 1; min-height: 0; margin-bottom: 0; }
+
+/* 右列：应用管理单卡独占整列高度 */
+.card-app { display: flex; flex-direction: column; min-height: 0; margin-bottom: 0; }
+
+/* 应用列表：单行式应用行（包名 + 4 操作按钮同一行） */
+.app-list {
+    flex: 1; min-height: 220px;                 /* 兜底下限，正常情况远高于此 */
+    overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: #fff;
+}
+.app-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;                          /* 8px → 6px，单行约 38px */
+    border-bottom: 1px solid #f0f2f6; font-size: 12.5px;
+}
+.app-row:last-child { border-bottom: none; }
+.app-pkg { flex: 1; font-family: Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-row .btn { padding: 3px 9px; font-size: 11.5px; flex-shrink: 0; }
+.app-row .op-danger { color: var(--danger); border-color: #f3c1c1; }
+.app-list-meta { font-size: 11.5px; color: #15803d; margin-top: 4px; }
+/* 安装 APK 固定在应用管理卡底部 */
+.apk-install-bar {
+    margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+    display: flex; gap: 8px; align-items: center;
+}
+.apk-install-bar .input { flex: 1; min-width: 0; }
+.apk-install-bar .btn { flex-shrink: 0; }
+
+/* 录屏态演示 */
+.rec-timer { display: none; align-items: center; gap: 6px; font-size: 12.5px; color: var(--danger); font-weight: 600; }
+.recording .rec-timer { display: inline-flex; }
+.rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .15; } }
+
+/* ===== 日志抓取独立卡（录屏互斥联动） ===== */
+.logcard-mutex-hint { display: none; color: var(--danger); font-size: 12px; }
+.recording .logcard-mutex-hint { display: inline; }
+body.recording #btn-start-logcat { opacity: .45; cursor: not-allowed; }
+
+/* ===== 底部三模式面板 ===== */
+.output-panel { flex: 0 0 170px; min-height: 0; display: flex; flex-direction: column; }
+.mode-switch { display: flex; gap: 6px; }
+.mode-btn { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 5px 14px; font-size: 12.5px; color: var(--text-muted); cursor: pointer; }
+.mode-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.output-title-btns { margin-left: auto; display: flex; gap: 6px; }
+.cmd-area { flex: 1; min-height: 0; overflow-y: auto; background: #0f172a; color: #d7e2f0; border-radius: 8px; padding: 10px 12px; font-family: Consolas, monospace; font-size: 12px; margin-top: 8px; }
+
+/* ===== 现状版（v1.0.0，对比用） ===== */
+.ops-grid-old { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.app-list.old { min-height: 100px; flex: 0 0 128px; }
+.old-note { font-size: 12px; color: #b91c1c; margin-top: 4px; }
+.old-main-row1 { display: grid; grid-template-columns: 5fr 7fr; gap: 10px; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="proto-header">
+    <h1>ADB 工具 V1.0.1 · UI 交互原型 v5</h1>
+    <div class="proto-tabs">
+        <button class="proto-tab active" id="tab-new" onclick="switchView('new')">V1.0.1 新方案</button>
+        <button class="proto-tab" id="tab-old" onclick="switchView('old')">V1.0.0 现状对比</button>
+    </div>
+    <span class="hint">原型仅演示布局与交互，数据为示意</span>
+</div>
+<div class="proto-note">
+    <div class="legend">
+        <span><span class="badge-num">1</span> 左列三卡：设备连接 / 屏幕采集 / 文件传输</span>
+        <span><span class="badge-num">2</span> 右列独占全高：应用管理（列表 2 行 → 10 行+）</span>
+        <span><span class="badge-num">3</span> 截图/录屏 模式切换共用一卡</span>
+        <span><span class="badge-num">4</span> 拉取/推送 模式切换共用一卡</span>
+        <span><span class="badge-num">5</span> 安装 APK 固定在应用管理底部</span>
+        <span><span class="badge-num">6</span> 录制态红点计时 + 抓取互斥（点「开始录屏」试试）</span>
+    </div>
+    <label class="toggle-label"><input type="checkbox" onchange="toggleBadges(this.checked)"> 隐藏标注圆点</label>
+</div>
+
+<!-- ============================================================
+     视图一：V1.0.1 新方案
+============================================================ -->
+<div class="window" id="win-new">
+    <header class="header">
+        <h1 class="title">ADB 工具</h1>
+        <span class="badge badge-ok">ADB 已就绪</span>
+    </header>
+
+    <div class="main-area">
+        <!-- ①② 主体：左列三卡 | 右列应用管理独占全高 -->
+        <div class="main-duo">
+
+            <!-- 左列 -->
+            <div class="col-left">
+
+                <!-- 卡1：设备连接 -->
+                <section class="card">
+                    <div class="card-title"><h2>设备连接</h2><span class="hint">USB 即插即用；TCP 先输 IP</span></div>
+                    <div class="row">
+                        <input class="input" value="192.168.1.100" readonly>
+                        <input class="input" style="max-width:110px" value="5555" readonly>
+                    </div>
+                    <div class="row">
+                        <button class="btn btn-success">连接</button>
+                        <button class="btn btn-primary">刷新设备</button>
+                        <button class="btn">查看设备与历史</button>
+                    </div>
+                    <select class="select" style="width:100%;flex:none;margin-top:2px">
+                        <option>10.12.30.66:5555（device）— 当前设备</option>
+                    </select>
+                </section>
+
+                <!-- 卡2：屏幕采集（③ 截图/录屏 模式切换） -->
+                <section class="card">
+                    <div class="card-title">
+                        <h2>屏幕采集</h2>
+                        <div class="seg" id="seg-capture">
+                            <button class="seg-btn active" data-mode="shot" onclick="switchSeg('seg-capture','shot')">📷 截图</button>
+                            <button class="seg-btn" data-mode="rec" onclick="switchSeg('seg-capture','rec')">🎥 录屏</button>
+                        </div>
+                    </div>
+                    <!-- 截图模式 -->
+                    <div class="mode-pane" id="pane-capture-shot">
+                        <div class="row">
+                            <input class="input" placeholder="保存目录（默认 screenshots/）" readonly>
+                            <button class="btn btn-sm">选目录</button>
+                            <button class="btn btn-primary">一键截图</button>
+                        </div>
+                    </div>
+                    <!-- 录屏模式（选「录屏」才出现） -->
+                    <div class="mode-pane hidden" id="pane-capture-rec">
+                        <div class="row">
+                            <input class="input" placeholder="保存目录（默认 videos/）" readonly>
+                            <button class="btn btn-sm">选目录</button>
+                            <button class="btn btn-primary" id="btn-rec" onclick="toggleRec()">开始录屏</button>
+                            <span class="rec-timer"><span class="rec-dot"></span><span id="rec-time">00:00</span></span>
+                        </div>
+                        <div class="hint">单段最长 3 分钟，到时自动停止并保存</div>
+                    </div>
+                </section>
+
+                <!-- 卡3：文件传输（④ 拉取/推送 模式切换） -->
+                <section class="card">
+                    <div class="card-title">
+                        <h2>文件传输</h2>
+                        <div class="seg" id="seg-transfer">
+                            <button class="seg-btn active" data-mode="pull" onclick="switchSeg('seg-transfer','pull')">⬇️ 拉取</button>
+                            <button class="seg-btn" data-mode="push" onclick="switchSeg('seg-transfer','push')">⬆️ 推送</button>
+                        </div>
+                    </div>
+                    <!-- 拉取模式 -->
+                    <div class="mode-pane" id="pane-transfer-pull">
+                        <div class="row">
+                            <input class="input" placeholder="设备路径，如 /sdcard/DCIM">
+                            <button class="btn btn-primary">开始拉取</button>
+                        </div>
+                        <div class="row">
+                            <input class="input" placeholder="本机保存目录（默认 pull/）" readonly>
+                            <button class="btn btn-sm">选目录</button>
+                        </div>
+                    </div>
+                    <!-- 推送模式 -->
+                    <div class="mode-pane hidden" id="pane-transfer-push">
+                        <div class="row">
+                            <input class="input" placeholder="本机文件路径" readonly>
+                            <button class="btn btn-sm">选文件</button>
+                        </div>
+                        <div class="row">
+                            <input class="input" placeholder="设备目标路径，如 /sdcard/">
+                            <button class="btn btn-primary">开始推送</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- 右列：应用管理独占全高（②⑤） -->
+            <section class="card card-app">
+                <div class="card-title">
+                    <h2>应用管理</h2>
+                    <span class="hint">查询应用，在列表中直接操作</span>
+                </div>
+                <div class="row" style="margin-bottom:6px">
+                    <input class="input" placeholder="按包名关键字过滤（可留空）">
+                    <label class="checkbox"><input type="checkbox"> 仅第三方</label>
+                    <button class="btn btn-primary">查询应用</button>
+                </div>
+                <div class="app-list">
+                    <div class="app-row"><span class="app-pkg">com.android.chrome</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.android.settings</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.tencent.mm</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.ss.android.ugc.aweme</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.example.devtools</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.example.logcollector</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.huawei.systemmanager</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.miui.securitycenter</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.eg.android.AlipayGphone</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.xiaomi.market</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.autonavi.minimap</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.sankuai.meituan</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                </div>
+                <div class="app-list-meta">▲ 同一窗口尺寸：旧版可见约 2 行 → 新版可见 10 行+</div>
+                <!-- ⑤ 安装 APK 固定在应用管理底部（查应用→管应用→装应用，语义闭环） -->
+                <div class="apk-install-bar">
+                    <input class="input" placeholder="APK 路径（可手填）" readonly>
+                    <button class="btn btn-sm">选文件</button>
+                    <button class="btn btn-sm">安装（-r 覆盖）</button>
+                </div>
+            </section>
+        </div>
+
+        <!-- 日志抓取：独立模块（⑥ 与录屏互斥联动） -->
+        <section class="card logcard">
+            <div class="card-title">
+                <h2>日志抓取</h2>
+                <span style="display:flex;align-items:center;gap:10px">
+                    <span class="logcard-mutex-hint">⚠ 录屏进行中，抓取暂不可用</span>
+                    <span class="hint">一键开始 / 结束，自动保存为文件</span>
+                </span>
+            </div>
+            <div class="row" style="margin-bottom:0">
+                <button class="btn btn-success" id="btn-start-logcat">开始抓取</button>
+                <button class="btn btn-danger">结束抓取</button>
+                <label class="checkbox"><input type="checkbox"> 抓取前清空设备日志缓冲</label>
+                <input class="input" placeholder="保存目录（留空默认 logs/）" readonly>
+                <button class="btn btn-sm">选目录</button>
+                <span class="hint">当前状态：未抓取</span>
+            </div>
+        </section>
+
+        <section class="card output-panel">
+            <div class="card-title" style="margin-bottom:0">
+                <div class="mode-switch">
+                    <button class="mode-btn active">操作反馈</button>
+                    <button class="mode-btn">命令行</button>
+                    <button class="mode-btn">实时日志</button>
+                </div>
+                <div class="output-title-btns">
+                    <button class="btn btn-sm">清空</button>
+                    <button class="btn btn-sm">收起 ▾</button>
+                </div>
+            </div>
+            <pre class="cmd-area">[09:41:02] ✅ 截图已保存：D:\tools\screenshots\screenshot_20260918_094102.png
+[09:41:15] ℹ️ 设备列表已自动刷新（3 台在线）
+[09:41:20] ⬇️ 拉取完成：/sdcard/DCIM → D:\pull\（12 个文件）</pre>
+        </section>
+    </div>
+</div>
+
+<!-- ============================================================
+     视图二：V1.0.0 现状（对比用）
+============================================================ -->
+<div class="window hidden" id="win-old">
+    <header class="header">
+        <h1 class="title">ADB 工具</h1>
+        <span class="badge badge-ok">ADB 已就绪</span>
+    </header>
+    <div class="main-area">
+        <div class="old-main-row1">
+            <section class="card">
+                <div class="card-title"><h2>设备连接</h2><span class="hint">USB 即插即用；TCP 先输 IP</span></div>
+                <div class="row">
+                    <input class="input" value="192.168.1.100" readonly>
+                    <input class="input" style="max-width:110px" value="5555" readonly>
+                </div>
+                <div class="row">
+                    <button class="btn btn-success">连接</button>
+                    <button class="btn btn-primary">刷新设备</button>
+                    <button class="btn">查看设备与历史</button>
+                </div>
+                <select class="select" style="width:100%;flex:none;margin-top:2px"><option>10.12.30.66:5555（device）</option></select>
+            </section>
+            <section class="card">
+                <div class="card-title"><h2>应用管理</h2><span class="hint">查询设备上的应用，在列表中直接操作</span></div>
+                <div class="row" style="margin-bottom:6px">
+                    <input class="input" placeholder="按包名关键字过滤（可留空）">
+                    <label class="checkbox"><input type="checkbox"> 仅第三方</label>
+                    <button class="btn btn-primary">查询应用</button>
+                </div>
+                <div class="app-list old">
+                    <div class="app-row"><span class="app-pkg">com.android.chrome</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.android.settings</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                    <div class="app-row"><span class="app-pkg">com.tencent.mm</span><button class="btn">启动</button><button class="btn">强停</button><button class="btn">清缓存</button><button class="btn op-danger">卸载</button></div>
+                </div>
+                <div class="old-note">↑ 现状：同一窗口下列表仅约 2 行可见（min-height 100px），浏览应用全靠滚动</div>
+            </section>
+        </div>
+
+        <section class="card">
+            <div class="card-title"><h2>文件与设备操作</h2><span class="hint">4 个操作平铺，截图与文件传输混杂，纵向占用大</span></div>
+            <div class="ops-grid-old">
+                <div class="mode-pane"><div class="row" style="margin-bottom:8px"><span style="font-size:13px;font-weight:600">📷 截图</span></div>
+                    <div class="row"><input class="input" placeholder="保存目录" readonly><button class="btn btn-sm">选目录</button></div>
+                    <button class="btn btn-primary">一键截图</button></div>
+                <div class="mode-pane"><div class="row" style="margin-bottom:8px"><span style="font-size:13px;font-weight:600">📦 安装 APK</span></div>
+                    <div class="row"><input class="input" placeholder="APK 路径" readonly><button class="btn btn-sm">选文件</button></div>
+                    <button class="btn">安装（-r 覆盖）</button></div>
+                <div class="mode-pane"><div class="row" style="margin-bottom:8px"><span style="font-size:13px;font-weight:600">⬇️ 拉取文件</span></div>
+                    <input class="input" placeholder="设备路径" style="margin-bottom:8px">
+                    <div class="row"><input class="input" placeholder="本机保存目录" readonly><button class="btn btn-sm">选目录</button></div>
+                    <button class="btn" style="margin-top:8px">开始拉取</button></div>
+                <div class="mode-pane"><div class="row" style="margin-bottom:8px"><span style="font-size:13px;font-weight:600">⬆️ 推送文件</span></div>
+                    <div class="row"><input class="input" placeholder="本机文件路径" readonly><button class="btn btn-sm">选文件</button></div>
+                    <input class="input" placeholder="设备目标路径" style="margin-bottom:8px">
+                    <button class="btn">开始推送</button></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-title"><h2>日志抓取</h2><span class="hint">一键开始 / 结束，日志自动保存为文件</span></div>
+            <div class="row">
+                <input class="input" placeholder="日志保存目录（留空默认 logs/）" readonly>
+                <button class="btn btn-sm">选择目录</button>
+                <button class="btn btn-sm">默认</button>
+            </div>
+            <div class="row" style="margin-bottom:0">
+                <button class="btn btn-success">开始抓取</button>
+                <button class="btn btn-danger">结束抓取</button>
+                <label class="checkbox"><input type="checkbox"> 抓取前清空设备日志缓冲</label>
+                <span class="hint">当前状态：未抓取</span>
+            </div>
+        </section>
+
+        <section class="card output-panel">
+            <div class="card-title" style="margin-bottom:0">
+                <div class="mode-switch">
+                    <button class="mode-btn active">操作反馈</button>
+                    <button class="mode-btn">命令行</button>
+                    <button class="mode-btn">实时日志</button>
+                </div>
+                <div class="output-title-btns">
+                    <button class="btn btn-sm">清空</button>
+                    <button class="btn btn-sm">收起 ▾</button>
+                </div>
+            </div>
+            <pre class="cmd-area">（底部三模式面板，与新版一致）</pre>
+        </section>
+    </div>
+</div>
+
+<script>
+// ===== 视图切换 =====
+function switchView(which) {
+    document.getElementById('win-new').classList.toggle('hidden', which !== 'new');
+    document.getElementById('win-old').classList.toggle('hidden', which !== 'old');
+    document.getElementById('tab-new').classList.toggle('active', which === 'new');
+    document.getElementById('tab-old').classList.toggle('active', which === 'old');
+    stopRec(); // 切走时复位演示态
+}
+
+// ===== 共用组件：卡内模式切换（截图⇄录屏 / 拉取⇄推送） =====
+function switchSeg(segId, mode) {
+    var seg = document.getElementById(segId);
+    // 分段按钮高亮切换
+    var btns = seg.querySelectorAll('.seg-btn');
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].classList.toggle('active', btns[i].getAttribute('data-mode') === mode);
+    }
+    // 面板互斥显示：pane id 规则 = pane-<组名>-<mode>
+    var group = segId.replace('seg-', '');
+    var panes = document.querySelectorAll('[id^="pane-' + group + '-"]');
+    for (var j = 0; j < panes.length; j++) {
+        var paneMode = panes[j].id.replace('pane-' + group + '-', '');
+        panes[j].classList.toggle('hidden', paneMode !== mode);
+    }
+    // 离开录屏模式时复位录制演示态
+    if (group === 'capture' && mode !== 'rec') { stopRec(); }
+}
+
+// ===== 标注圆点显隐 =====
+function toggleBadges(hide) {
+    var dots = document.querySelectorAll('.badge-num');
+    for (var i = 0; i < dots.length; i++) {
+        dots[i].style.display = hide ? 'none' : 'inline-flex';
+    }
+}
+
+// ===== 录屏交互演示：开始/停止 + 计时 + 互斥置灰联动 =====
+var recOn = false, recSec = 0, recTimer = null;
+function toggleRec() {
+    recOn ? stopRec() : startRec();
+}
+function startRec() {
+    recOn = true; recSec = 0;
+    document.body.classList.add('recording');
+    document.getElementById('win-new').classList.add('recording');
+    var btn = document.getElementById('btn-rec');
+    btn.textContent = '停止录屏';
+    btn.classList.remove('btn-primary'); btn.classList.add('btn-danger');
+    document.getElementById('rec-time').textContent = '00:00';
+    recTimer = setInterval(function () {
+        recSec++;
+        var m = String(Math.floor(recSec / 60)).padStart(2, '0');
+        var s = String(recSec % 60).padStart(2, '0');
+        document.getElementById('rec-time').textContent = m + ':' + s;
+        // 演示：15 秒模拟到达 3 分钟上限自动停止
+        if (recSec >= 15) { stopRec(); alert('【演示】已达最长录制时长（真实为 3 分钟），自动停止并保存'); }
+    }, 1000);
+}
+function stopRec() {
+    recOn = false;
+    if (recTimer) { clearInterval(recTimer); recTimer = null; }
+    document.body.classList.remove('recording');
+    var win = document.getElementById('win-new');
+    if (!win) { return; }
+    win.classList.remove('recording');
+    var btn = document.getElementById('btn-rec');
+    if (btn) {
+        btn.textContent = '开始录屏';
+        btn.classList.add('btn-primary'); btn.classList.remove('btn-danger');
+    }
+}
+</script>
+</body>
+</html>

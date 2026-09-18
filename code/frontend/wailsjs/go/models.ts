@@ -75,3 +75,24 @@ export namespace adb {
 
 }
 
+export namespace main {
+	
+	export class RecordState {
+	    recording: boolean;
+	    elapsed: number;
+	    phase: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecordState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.recording = source["recording"];
+	        this.elapsed = source["elapsed"];
+	        this.phase = source["phase"];
+	    }
+	}
+
+}
+

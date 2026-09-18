@@ -10,6 +10,8 @@ package adb
 // ============================================================================
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,4 +101,71 @@ func TestBlackboxDevicesParse(t *testing.T) {
 		t.Fatalf("第 2 台设备不符：%+v", devices[1])
 	}
 	_ = strings.TrimSpace // 保留 import 以便扩展
+}
+
+// 黑盒用例 3（V1.0.1）：录屏端到端 ——
+// Start（screenrecord 启动）→ Stop（pkill 停止信号 → pull 回传 → ftyp 校验通过
+// → rm 清理设备端）全链路经真实 stubadb 子进程执行，验证命令序列与产物。
+//
+// 说明：RecordSession 的 runner/spawner 直接跑真实子进程（stub adb exe），
+// 与单测的 fake 注入互补——单测验逻辑拼装，黑盒测"输入 → 子进程 → 产物"。
+func TestBlackboxRecordSessionE2E(t *testing.T) {
+	stub := buildStubADB(t)
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	stubFile := filepath.Join(t.TempDir(), "device-file.mp4") // 模拟设备端录像文件
+	saveDir := t.TempDir()
+
+	t.Setenv("STUB_OUT", argsFile)
+	t.Setenv("STUB_FILE", stubFile)
+	if err := os.Setenv("STUB_OUT", argsFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("STUB_FILE", stubFile); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Unsetenv("STUB_OUT")
+	defer os.Unsetenv("STUB_FILE")
+
+	// 用生产 spawner（真实子进程）+ 真实 runner（子进程经 stub adb）：
+	// NewRecordSession 默认即是生产实现，直接使用
+	s := NewRecordSession(stub, "192.168.1.100:5555")
+	s.SaveDir = saveDir
+
+	// 阶段一：开始录制（真实启动 stub 子进程，stub 收到 screenrecord 命令后
+	// 在 STUB_FILE 写伪 mp4，模拟设备端生成录像）
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal("Start 不应失败:", err)
+	}
+
+	// 阶段二：停止并回传（pkill 信号 → pull → ftyp 校验 → rm 清理）
+	path, err := s.Stop()
+	if err != nil {
+		t.Fatal("Stop 不应失败:", err)
+	}
+
+	// 产物校验：本地文件存在、带 ftyp 头、位于保存目录
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal("回传的视频文件应存在:", err)
+	}
+	if !bytes.Contains(data[:16], []byte("ftyp")) {
+		t.Fatal("回传文件应含 ftyp 头（stub 生成的伪 mp4）")
+	}
+	if filepath.Dir(path) != saveDir {
+		t.Fatalf("视频应保存在指定目录: %s（期望 %s）", path, saveDir)
+	}
+
+	// 命令序列校验：screenrecord → pkill → pull → rm 全部按序发出
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal("stub 未收到调用:", err)
+	}
+	// stubadb 每次调用覆盖写 args 文件，改为逐段校验调用历史不可行；
+	// 依赖产物校验（文件已回传且含 ftyp）+ 下面关键命令的存在性即可。
+	// 由于覆盖写，最后一条命令应为 rm -f（清理设备端）：
+	joined := string(got)
+	if !strings.Contains(joined, "rm") || !strings.Contains(joined, "-f") {
+		t.Fatalf("最后应执行设备端清理（rm -f），实际最后调用: %q", joined)
+	}
 }

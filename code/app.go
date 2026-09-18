@@ -22,6 +22,8 @@ import (
 //   - adbPath:  adb 可执行文件绝对路径（启动时检测/安装得到）
 //   - session:  当前日志抓取会话（同一时间仅一个）
 //   - logCancel: 日志抓取会话的取消函数
+//   - recSession: 当前录屏会话（同一时间仅一个，与日志抓取互斥）
+//   - recCancel: 录屏会话的取消函数
 //   - liveSession: 当前实时日志会话（与 session 相互独立，互不影响）
 //   - cmdCwd:   命令行模式的会话工作目录（cd 持久化用，初始 = exe 目录）
 //   - history:  设备连接历史跟踪器（跟随设备列表刷新记录最近断开的设备）
@@ -30,6 +32,8 @@ type App struct {
 	adbPath     string
 	session     *adb.LogcatSession
 	logCancel   context.CancelFunc
+	recSession  *adb.RecordSession
+	recCancel   context.CancelFunc
 	liveSession *adb.LiveLogSession
 	cmdCwd      string
 	history     *adb.DeviceHistory
@@ -124,10 +128,26 @@ func (a *App) SelectZipFile() (string, error) {
 	})
 }
 
-// shutdown 在应用关闭时被框架调用，负责清理日志抓取会话。
+// shutdown 在应用关闭时被框架调用，负责清理各类会话。
 func (a *App) shutdown(ctx context.Context) {
 	a.StopLogcat()
 	a.StopLiveLog() // 实时日志会话一并清理（幂等，未启动时调用无害）
+	// 录屏会话：仅终止本机 adb 进程（取消 ctx），**不等待回传**——
+	// shutdown 需要快速返回，完整「停止→回传→校验」流程可能包含多次
+	// adb 调用与最长 15 秒等待，会显著拖慢应用退出。设备端 screenrecord
+	// 失去 adb 连接后自行退出（time-limit 兜底），残留文件由下次录屏前的
+	// CleanStaleRemote 清理；本次视频因未正常收尾不可回传，属可接受损失。
+	a.abortScreenRecord()
+}
+
+// abortScreenRecord 快速终止录屏会话（仅杀本机 adb 进程，不回传不等待）。
+// 仅供应用退出路径使用；日常停止走 StopScreenRecord（完整回传流程）。
+func (a *App) abortScreenRecord() {
+	if a.recCancel != nil {
+		a.recCancel() // 取消会话 ctx → hiddenCmdContext 终止本机 adb 子进程
+		a.recCancel = nil
+	}
+	a.recSession = nil
 }
 
 // ensureAdb 检查 ADB 是否已就绪，未就绪时返回友好错误。
@@ -282,6 +302,114 @@ func (a *App) Screenshot(serial, saveDir string) (string, error) {
 	return adb.Screenshot(a.adbPath, serial, saveDir)
 }
 
+// StartScreenRecord 开始对指定设备录屏（对应 adb shell screenrecord，V1.0.1 新增）。
+// 与一键日志抓取互斥：开始录屏前若日志抓取在进行中则报错（两者共用设备
+// shell 通道，并行会互相干扰）；实时日志/命令行模式不受影响。
+// 录制期间前端每秒轮询 IsRecording/录屏秒数展示计时；单段最长 3 分钟，
+// 到时设备端自动结束（--time-limit 兜底），前端停止时仍可正常回传。
+// 入参:
+//   - serial:  目标设备序列号
+//   - saveDir: 视频保存目录；空字符串表示默认位置（程序目录下 videos/）
+//
+// 返回: 启动失败错误（设备不支持 screenrecord / 录屏或抓取已在进行中）
+func (a *App) StartScreenRecord(serial, saveDir string) error {
+	if err := a.ensureAdb(); err != nil {
+		return err
+	}
+
+	// 与一键日志抓取互斥
+	if a.session != nil {
+		return fmt.Errorf("日志抓取进行中，请先结束抓取再开始录屏")
+	}
+	// 已有录屏会话：直接拒绝（前端「开始/停止」同位互斥按钮保证正常流程
+	// 不会走到；并发/异常场景宁可报错，也不静默丢弃上一段视频——
+	// 旧版在这里幂等预停止会「静默回传上段视频且用户永远看不到路径」）
+	if a.recSession != nil {
+		return fmt.Errorf("已有录屏会话进行中，请先停止当前录屏")
+	}
+
+	// 预清理设备端历史残留（上次异常退出未回传的临时文件）
+	cleaner := adb.NewRecordSession(a.adbPath, serial)
+	cleaner.CleanStaleRemote()
+
+	// 派生可取消 context：应用退出时通知会话异常终止
+	ctx, cancel := context.WithCancel(a.ctx)
+	session := adb.NewRecordSession(a.adbPath, serial)
+	session.SaveDir = saveDir
+
+	if err := session.Start(ctx); err != nil {
+		cancel()
+		return err
+	}
+
+	a.recSession = session
+	// cancel 交由 StopScreenRecord 释放；会话活跃期间由结构体持有
+	a.recCancel = cancel
+
+	return nil
+}
+
+// StopScreenRecord 停止当前录屏并回传视频到本机（幂等，无会话时无害）。
+// 入参:
+//   - saveDir: 视频保存目录（与 StartScreenRecord 一致；留空用会话已保存的目录）
+//
+// 返回: 本机视频文件完整路径与错误
+func (a *App) StopScreenRecord() (string, error) {
+	if a.recSession == nil {
+		return "", nil
+	}
+	path, err := a.recSession.Stop()
+	if a.recCancel != nil {
+		a.recCancel()
+		a.recCancel = nil
+	}
+	a.recSession = nil
+	return path, err
+}
+
+// AbortScreenRecord 立即放弃当前录屏会话（取消会话 ctx 终止本机 adb 进程，
+// 不做停止信号与回传）。供设备断开/切换场景：设备已不可达，完整停止+回传
+// 流程必然失败且阻塞界面清理链；设备端残留由下次录屏前的 CleanStaleRemote 清理。
+func (a *App) AbortScreenRecord() {
+	if a.recSession == nil {
+		return
+	}
+	// 触发会话监听 goroutine 的自然结束路径：ctx 取消 → adb 子进程被终止
+	// → Wait 返回 → phase 已非 Recording（下面立刻改）→ goroutine 不自动回传。
+	// 但 Stop 若被并发调用也无害（幂等保护）；这里直接取消并清会话即可。
+	a.abortScreenRecord()
+}
+
+// RecordState 是录屏会话状态（IsRecording 的单返回值载体）。
+// Wails v2.11 绑定仅支持 1~2 个返回值（boundMethod.Call 无 3 值分支，
+// 3 值会静默 marsh 成 null），多字段状态必须打包为 struct。
+type RecordState struct {
+	// Recording 是否处于录制中
+	Recording bool `json:"recording"`
+	// Elapsed 已录制秒数（非录制态为 0）
+	Elapsed int `json:"elapsed"`
+	// Phase 状态字（idle/recording/stopping/finished/error）
+	Phase string `json:"phase"`
+}
+
+// IsRecording 返回录屏会话状态（前端每秒轮询，驱动计时与按钮互斥）。
+// 返回单 struct（Wails 绑定 1 值返回，安全 marshal）。
+func (a *App) IsRecording() RecordState {
+	if a.recSession == nil {
+		return RecordState{
+			Recording: false,
+			Elapsed:   0,
+			Phase:     adb.RecordIdle.String(),
+		}
+	}
+	phase, _ := a.recSession.Phase()
+	return RecordState{
+		Recording: phase == adb.RecordRecording,
+		Elapsed:   a.recSession.ElapsedSec(),
+		Phase:     phase.String(),
+	}
+}
+
 // InstallAPK 覆盖安装 APK（对应 adb install -r）。
 // 入参:
 //   - serial:  目标设备序列号
@@ -378,6 +506,11 @@ func (a *App) SelectDirectory() (string, error) {
 func (a *App) StartLogcat(serial, saveDir string, clearBefore bool) (string, error) {
 	if err := a.ensureAdb(); err != nil {
 		return "", err
+	}
+
+	// 与录屏互斥（录屏进行中共用设备 shell 通道，并行互相干扰）
+	if a.recSession != nil {
+		return "", fmt.Errorf("录屏进行中，请先停止录屏再开始抓取")
 	}
 
 	// 可选的前置清空：失败则中止抓取并返回原因（缓冲未清成功，

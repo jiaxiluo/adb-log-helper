@@ -67,13 +67,13 @@ where adb >nul 2>&1
 if %errorlevel% neq 0 (
     echo [SKIP] adb not on PATH.
 ) else (
-    echo --- adb devices (expect: "List of devices attached" then serial state) ---
+    echo --- adb devices: expect "List of devices attached" then "serial state" ---
     adb devices 2>&1
     echo.
-    echo --- adb shell pm list packages (first 3 lines, expect "package:xxx") ---
+    echo --- adb shell pm list packages: first 3 lines, expect "package:xxx" ---
     adb shell pm list packages 2>&1 | findstr /n "." | findstr "^[1-3]:" 2>nul
     echo.
-    echo [INFO] Compare above with ops.go parsing (Devices/ListPackages).
+    echo [INFO] Compare above with ops.go parsing - Devices/ListPackages.
 )
 echo.
 
@@ -82,7 +82,7 @@ echo  [5/5] Full wails build (production exe)
 echo ============================================================
 where wails >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [SKIP] wails CLI not installed (run build.bat first).
+    echo [SKIP] wails CLI not installed - run build.bat first.
 ) else (
     wails build > check-wails.log 2>&1
     if !errorlevel! neq 0 (

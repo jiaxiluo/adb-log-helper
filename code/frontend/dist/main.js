@@ -770,7 +770,152 @@ function showConfirm(title, message, okText) {
 }
 
 /* ---------------------------------------------------------------------------
- * 文件与设备操作（截图 / 安装 APK / pull / push）
+ * 分组卡片共用组件：卡内模式切换（V1.0.1 新增）
+ *   屏幕采集卡：[📷 截图 | 🎥 录屏] —— 选哪个模式只显示哪个模式的控件
+ *   文件传输卡：[⬇️ 拉取 | ⬆️ 推送]
+ * 切换规则：分段按钮高亮互斥 + 对应模式面板互斥显示；
+ * 离开录屏模式时若在录制中则先停止（防误切走后录屏失控）
+ * ------------------------------------------------------------------------ */
+
+// 切换某个分组卡片的模式。
+// 入参:
+//   - segId: 分段容器 id（seg-capture / seg-transfer）
+//   - mode:  目标模式（shot|rec / pull|push）
+function switchSeg(segId, mode) {
+    // 分段按钮高亮互斥
+    document.querySelectorAll("#" + segId + " .seg-btn").forEach(function (btn) {
+        btn.classList.toggle("seg-btn-active", btn.dataset.mode === mode);
+    });
+    // 模式面板互斥显示（pane id 规则 = pane-<组名>-<模式>）
+    const group = segId.replace("seg-", "");
+    document.querySelectorAll('[id^="pane-' + group + '-"]').forEach(function (pane) {
+        const paneMode = pane.id.replace("pane-" + group + "-", "");
+        pane.style.display = paneMode === mode ? "block" : "none";
+    });
+    // 离开录屏模式时若仍在录制：先停止（尽力回传），避免切换导致状态失控
+    if (group === "capture" && mode !== "rec" && recActive) {
+        doStopRecord();
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * 录屏（V1.0.1 新增，与截图同卡分段切换）
+ * 交互：开始/停止同位按钮 + 红点闪烁 + mm:ss 计时（每秒轮询 IsRecording）。
+ * 与日志抓取互斥：录制中「开始抓取」置灰（后端同样校验，双保险）。
+ * 单段最长 3 分钟：到时设备端自动结束，前端轮询发现非录制态即收尾展示路径。
+ * ------------------------------------------------------------------------ */
+
+// 录屏计时轮询句柄（null = 未在轮询）
+let recTimerHandle = null;
+
+// 录屏按钮当前是否处于「录制中」态（控制切卡联动与互斥置灰的本地缓存）
+let recActive = false;
+
+// 秒数 → mm:ss 文本
+function fmtRecTime(sec) {
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+// 开始录屏
+async function doStartRecord() {
+    const serial = requireDevice();
+    if (!serial) return;
+    const dir = $("rec-dir").value.trim(); // 空 = 默认程序目录下 videos/
+
+    $("btn-rec").disabled = true; // 防连点
+    const res = await run(window.go.main.App.StartScreenRecord(serial, dir));
+    $("btn-rec").disabled = false;
+    if (!res.ok) {
+        pushOutput("❌ 录屏启动失败：" + res.err);
+        return;
+    }
+    setRecUIState(true, 0);
+    pushOutput("✅ 录屏已开始（最长 3 分钟，到时自动停止）");
+    startRecPolling();
+}
+
+// 停止录屏并回传
+async function doStopRecord() {
+    stopRecPolling();
+    $("btn-rec").disabled = true;
+    $("btn-rec").textContent = "正在停止并回传…";
+    const res = await run(window.go.main.App.StopScreenRecord());
+    $("btn-rec").disabled = false;
+    setRecUIState(false, 0);
+    if (!res.ok) {
+        pushOutput("❌ 录屏停止失败：" + res.err);
+        return;
+    }
+    // 无会话时后端返回空路径（幂等），不提示
+    if (res.result) {
+        pushOutput("✅ 录屏已保存：" + res.result);
+    }
+}
+
+// 开始/停止录屏（同位按钮分发）
+function onRecButton() {
+    if (recActive) {
+        doStopRecord();
+    } else {
+        doStartRecord();
+    }
+}
+
+// 切换录屏按钮与计时器的显示状态
+// 入参: active 是否录制中；elapsed 当前已录秒数
+function setRecUIState(active, elapsed) {
+    recActive = active;
+    const btn = $("btn-rec");
+    btn.textContent = active ? "停止录屏" : "开始录屏";
+    btn.classList.toggle("btn-danger", active);
+    btn.classList.toggle("btn-primary", !active);
+    $("rec-timer").style.display = active ? "inline-flex" : "none";
+    $("rec-time").textContent = fmtRecTime(elapsed);
+    // 互斥联动：录制中「开始抓取」置灰 + 显示提示
+    $("btn-start-logcat").disabled = active;
+    $("logcat-mutex-hint").style.display = active ? "inline" : "none";
+}
+
+// 启动计时轮询（每秒查一次 IsRecording，同步计时与异常收尾）
+function startRecPolling() {
+    stopRecPolling();
+    recTimerHandle = setInterval(async function () {
+        try {
+            // Wails 绑定单 struct 返回（3 返回值会静默 null，见后端注释），
+            // 字段经 JSON tag：recording / elapsed / phase
+            const st = await window.go.main.App.IsRecording();
+            if (!st || typeof st.recording !== "boolean") {
+                return; // 异常载荷：跳过本 tick，下轮重试
+            }
+            if (st.recording) {
+                $("rec-time").textContent = fmtRecTime(st.elapsed);
+            } else {
+                // 非录制态（正常停止由 doStopRecord 处理；这里兜底处理
+                // 设备端自动结束/异常退出场景）：复位按钮并提示
+                stopRecPolling();
+                if (recActive) {
+                    setRecUIState(false, 0);
+                    pushOutput("ℹ️ 录屏已结束（可能达到 3 分钟上限或设备异常），视频已自动回传保存，路径见上方反馈。");
+                }
+            }
+        } catch (err) {
+            // 单次轮询失败（桥接瞬时抖动等）不终止轮询，下次 tick 重试；
+            // 连续失败时 App 层已不可用，属应用退出场景，轮询随页面销毁自然结束
+        }
+    }, 1000);
+}
+
+// 停止计时轮询
+function stopRecPolling() {
+    if (recTimerHandle) {
+        clearInterval(recTimerHandle);
+        recTimerHandle = null;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * 文件与设备操作（截图 / 安装 APK / pull / push，V1.0.1 重组为分组卡片）
  * ------------------------------------------------------------------------ */
 
 // 截图：adb exec-out screencap -p。
@@ -849,6 +994,14 @@ async function pickShotDir() {
     const res = await run(window.go.main.App.SelectDirectory());
     if (res.ok && res.result) {
         $("shot-dir").value = res.result;
+    }
+}
+
+// 选择录屏保存目录，回填到 rec-dir 输入框（留空 = 默认 videos/）
+async function pickRecDir() {
+    const res = await run(window.go.main.App.SelectDirectory());
+    if (res.ok && res.result) {
+        $("rec-dir").value = res.result;
     }
 }
 
@@ -1617,6 +1770,19 @@ function formatBytes(n) {
 //   1. 用户切换目标设备（onDeviceChanged）
 //   2. 后台轮询发现原选中设备已断开（refreshDevices 的 selectionLost 分支）
 async function resetDeviceDependentUI() {
+    // 0. 放弃旧设备上的录屏会话（Abort：仅终止 adb 进程不回传——设备已
+    //    不可达，等完整停止+回传流程必然失败且阻塞整条清理链）；
+    //    同时复位录屏按钮/计时/互斥置灰，保证界面状态一致
+    stopRecPolling();
+    if (recActive) {
+        setRecUIState(false, 0);
+    }
+    try {
+        await window.go.main.App.AbortScreenRecord();
+    } catch (err) {
+        // 绑定调用失败不影响后续清理（会话可能已由其他路径结束）
+    }
+
     // 1. 停止旧设备上的日志抓取会话（StopLogcat 幂等，未在抓取时调用无害）
     await window.go.main.App.StopLogcat();
     $("logcat-status").textContent = "当前状态：未抓取";
@@ -1757,6 +1923,24 @@ function init() {
     $("btn-packages").addEventListener("click", queryApps);
     // 应用列表行内按钮：事件委托统一分发
     $("app-list").addEventListener("click", onAppListClick);
+
+    // ---- 分组卡片共用组件：模式切换（V1.0.1）----
+    $("seg-capture").addEventListener("click", function (e) {
+        const mode = e.target.dataset.mode;
+        if (mode) {
+            switchSeg("seg-capture", mode);
+        }
+    });
+    $("seg-transfer").addEventListener("click", function (e) {
+        const mode = e.target.dataset.mode;
+        if (mode) {
+            switchSeg("seg-transfer", mode);
+        }
+    });
+
+    // ---- 录屏（V1.0.1）----
+    $("btn-rec").addEventListener("click", onRecButton);
+    $("btn-rec-dir").addEventListener("click", pickRecDir);
 
     // ---- 文件与设备操作 ----
     $("btn-shot").addEventListener("click", doScreenshot);

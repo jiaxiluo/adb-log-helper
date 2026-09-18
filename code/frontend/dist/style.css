@@ -121,21 +121,123 @@ body {
     margin-bottom: 12px;
 }
 
-/* ---------- 第一栏：设备连接 + 应用管理（左右布局，均分纵向空间） ---------- */
-.main-row1 {
-    flex: 1;                     /* 占据第一栏可用的全部剩余高度 */
-    min-height: 240px;           /* 非全屏关键保障：卡片自身开销约 138px，剩余空间保证列表 ≥2 行 */
+/* ---------- 主体左右两列（V1.0.1 v5 布局） ----------
+   左列三张轻量操作卡（设备连接/屏幕采集/文件传输）均分列高；
+   右列应用管理单卡独占整列高度（应用列表收益最大化：可见行数 2 → 10+） */
+.main-duo {
+    flex: 1;                     /* 占据日志抓取卡以外的全部剩余高度 */
+    min-height: 360px;           /* 非全屏兜底：保证左列三卡与右列列表可用 */
     display: grid;
-    grid-template-columns: 1fr 1.15fr; /* 右侧应用管理略宽（列表内容多） */
+    grid-template-columns: 1fr 1fr; /* 左右等宽 */
     gap: 12px;
-    align-items: stretch;        /* 两卡同高 */
+    align-items: stretch;
+    margin-bottom: 12px;
 }
 
-/* 第一栏中的卡片：纵向 flex，内容区占满剩余高度 */
-.main-row1 .card {
+/* 左列：三卡纵向排列、均分列高 */
+.col-left {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+}
+.col-left .card {
+    flex: 1;                     /* 三卡均分列高 */
+    min-height: 0;
+    margin-bottom: 0;            /* 间距由 col-left 的 gap 控制 */
+    display: flex;
+    flex-direction: column;
+}
+
+/* 右列：应用管理单卡独占整列（纵向 flex，列表吃满剩余空间） */
+.card-app {
+    margin-bottom: 0;
     display: flex;
     flex-direction: column;
     min-height: 0;
+}
+
+/* ---------- 分段切换（共用组件：截图|录屏 / 拉取|推送） ---------- */
+.seg {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+}
+.seg-btn {
+    padding: 5px 14px;
+    border: none;
+    background: #fff;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .15s;
+}
+.seg-btn + .seg-btn {
+    border-left: 1px solid var(--border);
+}
+.seg-btn:hover {
+    background: #f8fafc;
+}
+.seg-btn-active {
+    background: linear-gradient(135deg, #2563eb, #4f46e5);
+    color: #fff;
+    font-weight: 600;
+}
+.seg-btn-active:hover {
+    background: linear-gradient(135deg, #1d4ed8, #4338ca);
+}
+
+/* 模式面板：切换时互斥显示（由 JS 控制 display） */
+.mode-pane {
+    display: block;
+}
+
+/* ---------- 录屏状态（录制中：红点闪烁 + mm:ss 计时） ---------- */
+.rec-timer {
+    display: none;               /* 默认隐藏，录制中由 JS 切 inline-flex */
+    align-items: center;
+    gap: 6px;
+    color: var(--danger);
+    font-size: 12.5px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.rec-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--danger);
+    animation: rec-blink 1s infinite;
+}
+@keyframes rec-blink {
+    50% { opacity: .15; }
+}
+
+/* ---------- 录屏 ⇄ 日志抓取互斥提示 ---------- */
+.mutex-hint {
+    color: var(--danger);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* ---------- 安装 APK 栏（应用管理卡底部固定） ---------- */
+.apk-install-bar {
+    margin-top: 8px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;              /* 不被列表挤压 */
+}
+.apk-install-bar .input {
+    flex: 1;
+}
+.apk-install-bar .btn {
+    flex-shrink: 0;
 }
 
 /* ---------- 表单控件 ---------- */
@@ -231,34 +333,10 @@ body {
     flex: 1;   /* 输入框占满剩余宽度 */
 }
 
-/* ---------- 第二栏：文件与设备操作（整行 4 列横排，窄窗口自动换行） ---------- */
-.ops-grid4 {
-    display: grid;
-    /* 宽度足够时 4 张操作卡一行；变窄时自动换为 2 行，不出现横向滚动 */
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 10px;
-    align-items: stretch;        /* 同行操作卡等高 */
-}
-
-.op-item {
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    background: #fafbfd;
-}
-
-.op-name {
-    font-weight: 600;
-    font-size: 13px;
-}
-
-/* ---------- 应用列表（应用管理卡，内部滚动） ---------- */
+/* ---------- 应用列表（应用管理卡，独占右列剩余高度，内部滚动） ---------- */
 .app-list {
-    flex: 1;                     /* 占满卡片剩余高度 */
-    min-height: 100px;           /* 非全屏关键保障：单行实测约 43px，至少完整展示 2 行再进入滚动 */
+    flex: 1;                     /* 占满卡片剩余高度（v5：右列整列归它） */
+    min-height: 220px;           /* V1.0.1：100 → 220，极端小窗下仍可见约 5 行 */
     margin-top: 8px;
     overflow-y: auto;            /* 应用过多时列表内部滚动 */
     border: 1px solid var(--border);
@@ -272,7 +350,7 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 7px 12px;
+    padding: 6px 12px;           /* V1.0.1：7px → 6px，单行约 38px，同屏多显示一行 */
     border-bottom: 1px solid var(--border);
 }
 .app-row:last-child {
