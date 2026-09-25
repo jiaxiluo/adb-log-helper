@@ -20,7 +20,7 @@
 
 ## 技术要点
 
-- Kotlin 原生 App（无 Compose、无第三方 UI 框架），`minSdk 26` / `targetSdk 34`
+- Kotlin + Jetpack Compose（Material 3），无第三方业务依赖，`minSdk 26` / `targetSdk 34`
 - **手机内置 adb 二进制**：`app/src/main/jniLibs/` 打包 arm64-v8a / armeabi-v7a 两个 ABI 的
   adb 及其依赖库（libprotobuf 等，取自 Termux 环境提取），App 自身充当 adb 客户端，
   不依赖系统 adb、无需 root
