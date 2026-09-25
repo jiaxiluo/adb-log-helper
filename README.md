@@ -3,6 +3,8 @@
 一个零前端依赖的 Windows 桌面工具（基于 Wails v2 + WebView2），用图形界面完成常用的 ADB 操作与日志抓取，无需手动敲命令。
 
 > 📦 仓库地址：https://github.com/jiaxiluo/adb-log-helper （可执行文件见 [Releases](https://github.com/jiaxiluo/adb-log-helper/releases)，无需自行编译）
+>
+> 📱 **安卓移动版**：本仓库另含安卓手机版（Kotlin 原生 App，独立版本线 V1.0.0 起，与桌面版代码互不共用）——手机 Wi-Fi 直连电视/盒子装 APK、一键抓日志并分享，无需电脑，见 [android/README.md](android/README.md)
 
 ## 功能特性
 

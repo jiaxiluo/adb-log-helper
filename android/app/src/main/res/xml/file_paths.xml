@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 路径：抓取的日志在 files/logs/，崩溃记录在 files/crash/ -->
+<paths>
+    <files-path name="logs" path="logs/" />
+    <files-path name="crash" path="crash/" />
+</paths>

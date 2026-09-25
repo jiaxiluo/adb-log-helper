@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标前景：蓝色圆角方块 + 白色 ">_" 终端符号（矢量绘制，无位图依赖） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 背景圆角方块（安全区 66x66 居中） -->
+    <path
+        android:pathData="M21,21 h66 a0,0 0 0 1 0,0 v66 a0,0 0 0 1 0,0 h-66 a0,0 0 0 1 0,0 z"
+        android:fillColor="#2563EB" />
+    <!-- 终端符号 > -->
+    <path
+        android:pathData="M36,42 L48,54 L36,66"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+    <!-- 终端符号 _ -->
+    <path
+        android:pathData="M54,66 L70,66"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>

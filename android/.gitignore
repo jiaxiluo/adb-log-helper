@@ -1,0 +1,11 @@
+# 构建产物
+build/
+.gradle/
+local.properties
+app/build/
+*.apk.idsig
+
+# 签名口令本地文件（不入库；格式：一行纯口令）
+signing.env
+__pycache__/
+*.pyc
