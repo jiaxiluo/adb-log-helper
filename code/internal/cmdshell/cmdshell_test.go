@@ -118,7 +118,7 @@ func TestDecodeConsoleBytes(t *testing.T) {
 // TestRunCommandEcho 真实执行链路：echo 输出可见、cwd 不变
 func TestRunCommandEcho(t *testing.T) {
 	base := t.TempDir()
-	out, newCwd, err := RunCommand(base, "echo hello_cmdshell")
+	out, newCwd, err := RunCommand(base, "", "echo hello_cmdshell")
 	if err != nil {
 		t.Fatalf("echo 执行失败: %v", err)
 	}
@@ -139,22 +139,22 @@ func TestRunCommandCd(t *testing.T) {
 	}
 
 	// cd 进入子目录
-	out, cwd, err := RunCommand(base, "cd "+sub)
+	out, cwd, err := RunCommand(base, "", "cd "+sub)
 	if err != nil || cwd != sub {
 		t.Fatalf("cd 失败: out=%q cwd=%q err=%v", out, cwd, err)
 	}
 
 	// 后续命令应在新目录执行：echo 一个文件再 dir 应能看到
-	if _, _, err := RunCommand(cwd, "echo hi > proof.txt"); err != nil {
+	if _, _, err := RunCommand(cwd, "", "echo hi > proof.txt"); err != nil {
 		t.Fatalf("写文件失败: %v", err)
 	}
-	out, _, _ = RunCommand(cwd, "dir /b")
+	out, _, _ = RunCommand(cwd, "", "dir /b")
 	if !strings.Contains(out, "proof.txt") {
 		t.Errorf("cd 后的命令应在子目录执行（应看到 proof.txt）: got %q", out)
 	}
 
 	// cd 到不存在路径：报错且目录不变
-	out, cwd2, _ := RunCommand(cwd, "cd Z:/no/such/dir")
+	out, cwd2, _ := RunCommand(cwd, "", "cd Z:/no/such/dir")
 	if cwd2 != cwd || !strings.Contains(out, "找不到") {
 		t.Errorf("cd 失败应保持 cwd 并报错: cwd=%q out=%q", cwd2, out)
 	}
@@ -162,8 +162,69 @@ func TestRunCommandCd(t *testing.T) {
 
 // TestRunCommandEmpty 空命令直接返回不执行
 func TestRunCommandEmpty(t *testing.T) {
-	out, cwd, err := RunCommand("C:/", "   ")
+	out, cwd, err := RunCommand("C:/", "", "   ")
 	if err != nil || out != "" || cwd != "C:/" {
 		t.Errorf("空命令应直接返回: out=%q cwd=%q err=%v", out, cwd, err)
+	}
+}
+
+// TestRunCommandInjectsPath 黑盒验证 PATH 注入：临时目录放一个唯一定义的
+// 批处理，注入该目录后 cmd 应能按名解析执行；不注入（adbDir 为空）则找不到。
+// 这正是面板 adb 命令的场景——adb 目录不在进程 PATH 时靠注入命中
+func TestRunCommandInjectsPath(t *testing.T) {
+	base := t.TempDir()
+	toolDir := filepath.Join(base, "fake-adb-tools")
+	if err := os.MkdirAll(toolDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 唯一命令名，避免碰巧命中系统 PATH 里的同名程序
+	const toolName = "zz_cmdshell_inject_probe"
+	batPath := filepath.Join(toolDir, toolName+".bat")
+	// 批处理用 CRLF 行尾，规避 LF-only 批处理在个别 cmd 版本下的解析怪癖
+	if err := os.WriteFile(batPath, []byte("@echo inject_probe_ok\r\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1) 注入目录：命令按名解析成功，输出标记文本
+	out, _, err := RunCommand(base, toolDir, toolName)
+	if err != nil {
+		t.Fatalf("注入 PATH 后执行失败: %v", err)
+	}
+	if !strings.Contains(out, "inject_probe_ok") {
+		t.Errorf("注入 PATH 后应执行到批处理: got %q", out)
+	}
+
+	// 2) 不注入：同样的命令名应解析失败（找不到程序，输出不含标记文本）
+	out, _, err = RunCommand(base, "", toolName)
+	if err != nil {
+		t.Fatalf("执行失败: %v", err)
+	}
+	if strings.Contains(out, "inject_probe_ok") {
+		t.Errorf("未注入 PATH 不应执行到批处理: got %q", out)
+	}
+}
+
+// TestBuildChildEnv 白盒验证子进程环境构造：PATH 只剩一条且注入目录在最前，
+// 其余环境变量原样保留
+func TestBuildChildEnv(t *testing.T) {
+	const fakeDir = `D:\fake-adb-dir`
+	env := buildChildEnv(fakeDir)
+
+	pathCount := 0
+	pathValue := ""
+	for _, e := range env {
+		if len(e) >= 5 && strings.EqualFold(e[:5], "PATH=") {
+			pathCount++
+			pathValue = e[len("PATH="):]
+		}
+	}
+	if pathCount != 1 {
+		t.Errorf("子进程环境应只含一条 PATH, got %d", pathCount)
+	}
+	if !strings.HasPrefix(pathValue, fakeDir+";") {
+		t.Errorf("PATH 应以注入目录开头: got %q", pathValue)
+	}
+	if !strings.HasSuffix(pathValue, os.Getenv("PATH")) {
+		t.Errorf("PATH 应保留原值在后: got %q", pathValue)
 	}
 }

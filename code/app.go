@@ -27,6 +27,7 @@ import (
 //   - recCancel: 录屏会话的取消函数
 //   - liveSession: 当前实时日志会话（与 session 相互独立，互不影响）
 //   - cmdCwd:   命令行模式的会话工作目录（cd 持久化用，初始 = exe 目录）
+//   - shellSession: 命令行面板的交互式 adb shell 会话（裸 adb shell 进入，V1.8.2）
 //   - history:  设备连接历史跟踪器（跟随设备列表刷新记录最近断开的设备）
 type App struct {
 	// mu 保护以下会话字段的并发访问：Wails 在独立 goroutine 上调用每个绑定
@@ -34,15 +35,16 @@ type App struct {
 	// 「检查再赋值」逻辑，必须由同一把锁保证原子性（含 IsRecording 每秒轮询）。
 	mu sync.Mutex
 
-	ctx         context.Context
-	adbPath     string
-	session     *adb.LogcatSession
-	logCancel   context.CancelFunc
-	recSession  *adb.RecordSession
-	recCancel   context.CancelFunc
-	liveSession *adb.LiveLogSession
-	cmdCwd      string
-	history     *adb.DeviceHistory
+	ctx          context.Context
+	adbPath      string
+	session      *adb.LogcatSession
+	logCancel    context.CancelFunc
+	recSession   *adb.RecordSession
+	recCancel    context.CancelFunc
+	liveSession  *adb.LiveLogSession
+	cmdCwd       string
+	shellSession *cmdshell.ShellSession
+	history      *adb.DeviceHistory
 }
 
 // NewApp 创建一个 App 实例。
@@ -137,7 +139,8 @@ func (a *App) SelectZipFile() (string, error) {
 // shutdown 在应用关闭时被框架调用，负责清理各类会话。
 func (a *App) shutdown(ctx context.Context) {
 	a.StopLogcat()
-	a.StopLiveLog() // 实时日志会话一并清理（幂等，未启动时调用无害）
+	a.StopLiveLog()   // 实时日志会话一并清理（幂等，未启动时调用无害）
+	a.StopShellTerm() // 交互式 adb shell 会话一并清理（幂等）
 	// 录屏会话：仅终止本机 adb 进程（取消 ctx），**不等待回传**——
 	// shutdown 需要快速返回，完整「停止→回传→校验」流程可能包含多次
 	// adb 调用与最长 15 秒等待，会显著拖慢应用退出。设备端 screenrecord
@@ -685,6 +688,9 @@ func (a *App) IsLiveLogRunning() bool {
 
 // RunCmd 执行一条 Windows cmd 命令并返回输出（底部面板「命令行模式」入口）。
 // 会话级 cd 持久化：内部维护 cmdCwd，cd 命令更新它，其余命令在其下执行。
+// adb 命令支持：把 adbPath 所在目录注入子进程 PATH——GUI 进程继承的 PATH
+// 未必包含 adb（双击启动 + 注册表 PATH 未广播刷新的场景），不注入的话
+// 面板里 adb / adb shell 会报「不是内部或外部命令」。
 // 命令的"业务失败"（非零退出码/找不到文件）不算 error——输出文本即结果；
 // error 仅表示命令无法启动（极少发生）。
 // 入参:
@@ -698,7 +704,11 @@ func (a *App) RunCmd(command string) (string, error) {
 			a.cmdCwd = abs
 		}
 	}
-	output, newCwd, err := cmdshell.RunCommand(a.cmdCwd, command)
+	adbDir := "" // 未检测到 adb 时不注入，行为与原先一致
+	if a.adbPath != "" {
+		adbDir = filepath.Dir(a.adbPath)
+	}
+	output, newCwd, err := cmdshell.RunCommand(a.cmdCwd, adbDir, command)
 	if err != nil {
 		return "", err
 	}
@@ -714,4 +724,115 @@ func (a *App) GetCmdCwd() string {
 		}
 	}
 	return a.cmdCwd
+}
+
+// ---------------------------- 交互式 adb shell 会话（V1.8.2） ----------------------------
+
+// shellTargetSerial 解析交互 shell 的目标设备参数。
+// serial 非空直接使用；为空时按已连接设备数判定：恰好 1 台免 -s，
+// 0 台/多台返回错误（前端把当前选中设备传进来，通常已非空）
+// 返回: (shell 命令参数前缀, 错误)
+func (a *App) shellTargetArgs(serial string) ([]string, error) {
+	if serial != "" {
+		return []string{"-s", serial, "shell"}, nil
+	}
+	devices, err := adb.Devices(a.adbPath)
+	if err != nil {
+		return nil, fmt.Errorf("查询设备列表失败: %w", err)
+	}
+	online := 0
+	for _, dev := range devices {
+		if dev.State == "device" {
+			online++
+		}
+	}
+	switch online {
+	case 1:
+		return []string{"shell"}, nil // 唯一设备可省 -s
+	case 0:
+		return nil, fmt.Errorf("没有在线设备，请先在「设备连接」中连接并选择设备")
+	default:
+		return nil, fmt.Errorf("当前有 %d 台在线设备，请在「设备连接」中选择目标设备后再进入 shell", online)
+	}
+}
+
+// StartShell 启动交互式 adb shell 会话（面板输入裸 adb shell 时触发）。
+// 输出经 "cmd-shell-output" 事件逐行推送；会话结束（exit/设备断开/主动停止）
+// 经 "cmd-shell-ended" 事件通知前端退回本机命令行模式。
+// 已有会话在跑时先停旧的再起新的（容错：前端异常路径残留的会话）
+// 入参:
+//   - serial: 目标设备序列号；空 = 自动判定（要求恰好一台在线设备）
+//
+// 返回: 启动错误
+func (a *App) StartShell(serial string) error {
+	if err := a.ensureAdb(); err != nil {
+		return err
+	}
+	args, err := a.shellTargetArgs(serial)
+	if err != nil {
+		return err
+	}
+
+	a.StopShellTerm() // 幂等清理旧会话（未运行时为空操作）
+
+	// 闭包需引用 session 自身做「仅清理自己」的判断，先声明后赋值。
+	// 旧会话的退出回调可能在新会话已就位后才异步触发，无条件置 nil 会误杀新会话
+	var session *cmdshell.ShellSession
+	session = cmdshell.NewShellSession(a.adbPath, args,
+		func(line string) {
+			runtime.EventsEmit(a.ctx, "cmd-shell-output", line)
+		},
+		func() {
+			runtime.EventsEmit(a.ctx, "cmd-shell-ended", "")
+			a.mu.Lock()
+			if a.shellSession == session {
+				a.shellSession = nil // 只在仍是自己时置空（Running 随进程退出归 false）
+			}
+			a.mu.Unlock()
+		},
+	)
+	if err := session.Start(); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	a.shellSession = session
+	a.mu.Unlock()
+	runtime.LogInfo(a.ctx, fmt.Sprintf("交互 shell 已启动: %s %v", a.adbPath, args))
+	return nil
+}
+
+// WriteShell 向交互 shell 会话写入一行命令（面板 shell 态下回车触发）。
+// 入参:
+//   - line: 一行命令文本（不含换行）
+//
+// 返回: 会话未启动/已断开时的错误
+func (a *App) WriteShell(line string) error {
+	a.mu.Lock()
+	session := a.shellSession
+	a.mu.Unlock()
+	if session == nil || !session.Running() {
+		return fmt.Errorf("shell 会话未在运行")
+	}
+	return session.Write(line)
+}
+
+// StopShellTerm 主动停止交互 shell 会话（幂等，可重复调用）。
+// 前端切换设备 / 应用退出时调用；会话自然退出时由退出回调置空
+func (a *App) StopShellTerm() {
+	a.mu.Lock()
+	session := a.shellSession
+	a.shellSession = nil
+	a.mu.Unlock()
+	if session != nil {
+		session.Stop()
+	}
+}
+
+// IsShellRunning 返回交互 shell 会话是否运行中（前端刷新提示符用）
+func (a *App) IsShellRunning() bool {
+	a.mu.Lock()
+	session := a.shellSession
+	a.mu.Unlock()
+	return session != nil && session.Running()
 }

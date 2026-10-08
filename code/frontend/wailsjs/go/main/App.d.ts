@@ -33,6 +33,8 @@ export function IsLiveLogRunning():Promise<boolean>;
 
 export function IsRecording():Promise<main.RecordState>;
 
+export function IsShellRunning():Promise<boolean>;
+
 export function ListPackages(arg1:string,arg2:string,arg3:boolean):Promise<Array<string>>;
 
 export function Pull(arg1:string,arg2:string,arg3:string):Promise<string>;
@@ -59,10 +61,16 @@ export function StartLogcat(arg1:string,arg2:string,arg3:boolean):Promise<string
 
 export function StartScreenRecord(arg1:string,arg2:string):Promise<void>;
 
+export function StartShell(arg1:string):Promise<void>;
+
 export function StopLiveLog():Promise<void>;
 
 export function StopLogcat():Promise<void>;
 
 export function StopScreenRecord():Promise<string>;
 
+export function StopShellTerm():Promise<void>;
+
 export function Uninstall(arg1:string,arg2:string):Promise<string>;
+
+export function WriteShell(arg1:string):Promise<void>;

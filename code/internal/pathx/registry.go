@@ -31,6 +31,12 @@ func AddToUserPath(dirToAdd string) (bool, error) {
 
 	// 检查路径是否已存在
 	if isPathInList(absDir, currentPath) {
+		// 已写入注册表，但当前进程环境未必包含它——注册表改于上次运行、
+		// 且未广播 WM_SETTINGCHANGE 时，GUI 进程继承的还是旧 PATH。
+		// 这里补齐进程环境，保证本次运行内即可用（幂等：已在进程 PATH 中则跳过）
+		if procPath := os.Getenv("PATH"); !isPathInList(absDir, procPath) {
+			_ = os.Setenv("PATH", absDir+";"+procPath)
+		}
 		return false, nil
 	}
 

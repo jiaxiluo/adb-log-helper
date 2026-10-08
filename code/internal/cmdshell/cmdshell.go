@@ -43,14 +43,40 @@ const commandTimeout = 10 * time.Second
 // 且 cmdshell 不应反向依赖 adb 包
 const createNoWindow = 0x08000000
 
-// newHiddenCmd 创建隐藏窗口的 cmd.exe 命令对象（带超时上下文）
-func newHiddenCmd(ctx context.Context, args ...string) *exec.Cmd {
+// newHiddenCmd 创建隐藏窗口的 cmd.exe 命令对象（带超时上下文）。
+// extraPathDir 非空时会前置到子进程的 PATH 环境变量（见 buildChildEnv）
+func newHiddenCmd(ctx context.Context, extraPathDir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "cmd.exe", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: createNoWindow,
 	}
+	if extraPathDir != "" {
+		cmd.Env = buildChildEnv(extraPathDir)
+	}
 	return cmd
+}
+
+// buildChildEnv 构造子进程环境变量：把 adb 所在目录前置到 PATH。
+// 面板里的 adb 命令若按默认 PATH 解析，在「adb 只随本程序安装到 adb-tools\、
+// 或注册表 PATH 变更未广播到 Explorer」的环境下会报「不是内部或外部命令」；
+// 本程序已确切知道 adb 路径（App.adbPath），直接注入，不依赖进程 PATH。
+// 入参:
+//   - adbDir: adb 可执行文件所在目录（绝对路径）
+//
+// 返回: 带 PATH 前缀的完整环境变量列表
+func buildChildEnv(adbDir string) []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		// 剔除原 PATH（Windows 环境变量名不区分大小写），末尾追加新值，
+		// 避免 Go 在重复键上按"后者生效"去重导致注入失效
+		if len(e) >= 5 && strings.EqualFold(e[:5], "PATH=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "PATH="+adbDir+";"+os.Getenv("PATH"))
 }
 
 // ---------------------------- cd 命令解析（纯函数，有单测） ----------------------------
@@ -149,10 +175,13 @@ func DecodeConsoleBytes(b []byte) string {
 // 输出文本本身就是结果，返回给前端展示即可；error 仅在无法启动进程时出现。
 // 入参:
 //   - cwd:     当前工作目录（绝对路径）
+//   - adbDir:  adb 可执行文件所在目录（空 = 不注入）；非空时前置到子进程
+//     PATH，保证面板中的 adb / adb shell 命令总能命中本程序检测/安装的那份 adb，
+//     而不依赖 GUI 进程继承到的 PATH（双击启动时可能不含 adb）
 //   - command: 用户输入的完整命令行（空命令直接返回，不执行）
 //
 // 返回: (输出文本, 命令执行后的工作目录, 启动错误)
-func RunCommand(cwd, command string) (string, string, error) {
+func RunCommand(cwd, adbDir, command string) (string, string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", cwd, nil
 	}
@@ -174,7 +203,7 @@ func RunCommand(cwd, command string) (string, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
-	cmd := newHiddenCmd(ctx, "/C", command)
+	cmd := newHiddenCmd(ctx, adbDir, "/C", command)
 	cmd.Dir = cwd
 	var out bytes.Buffer
 	cmd.Stdout = &out

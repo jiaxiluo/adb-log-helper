@@ -1574,6 +1574,16 @@ let cmdHistory = [];
 const CMD_HISTORY_MAX = 50;
 let cmdHistIdx = -1; // -1 = 不在历史浏览态（正在输入新命令）
 
+// 交互式 adb shell 会话状态（V1.8.2）：裸 adb shell 进入、exit 退出。
+// shell 态下输入不再走本机 cmd，而是逐行写给长驻的 adb shell 进程，
+// 输出经 "cmd-shell-output" 事件异步回流渲染
+let shellActive = false;
+let shellLabel = "adb-shell"; // shell 态提示符标签（目标设备序列号或默认）
+
+// 裸 adb shell 命令识别：可选 -s 序列号；带后续命令（如 adb shell ls）
+// 不匹配，按普通命令一次性执行
+const BARE_ADB_SHELL_RE = /^\s*adb(?:\.exe)?\s+(?:-s\s+(\S+)\s+)?shell\s*$/i;
+
 // 追加一行到命令行输出并渲染（自动滚到底部）
 function appendCmdTermLine(text) {
     cmdTermLines.push(text);
@@ -1587,20 +1597,27 @@ function appendCmdTermLine(text) {
 
 // 更新命令提示符（显示后端会话的当前目录，形如 "C:\path>"）
 async function updateTermPrompt() {
+    if (shellActive) {
+        $("cmd-term-prompt").textContent = shellLabel + " #"; // shell 态与本地目录无关
+        return;
+    }
     const res = await run(window.go.main.App.GetCmdCwd());
     if (res.ok && res.result) {
         $("cmd-term-prompt").textContent = res.result + ">";
     }
 }
 
-// 执行一条命令：回显 → 调后端 RunCmd → 输出结果 → 刷新提示符（cd 可能改目录）
+// 执行一条命令。三路分发（V1.8.2）：
+//   1. shell 态 → 逐行写给设备交互 shell（WriteShell），输出经事件异步回流
+//   2. 裸 adb shell（可选 -s）→ 启动交互式设备 shell 会话（StartShell）
+//   3. 其余 → 本机 cmd 执行（RunCmd）
 async function execCmdTerm(command) {
     const trimmed = command.trim();
     if (!trimmed) {
         return; // 空命令不执行（也不进历史）
     }
 
-    // 进历史（去重：与上一条相同则不重复记录）
+    // 进历史（去重：与上一条相同则不重复记录）——本机命令与设备命令共用历史
     if (cmdHistory[cmdHistory.length - 1] !== trimmed) {
         cmdHistory.push(trimmed);
         if (cmdHistory.length > CMD_HISTORY_MAX) {
@@ -1612,6 +1629,33 @@ async function execCmdTerm(command) {
     // 回显：提示符 + 命令（与真实终端一致）
     appendCmdTermLine($("cmd-term-prompt").textContent + " " + trimmed);
 
+    // ---- 1) shell 态：命令直接写给设备交互 shell ----
+    if (shellActive) {
+        const wres = await run(window.go.main.App.WriteShell(trimmed));
+        if (!wres.ok) {
+            appendCmdTermLine("❌ " + wres.err);
+        }
+        return; // 输出经 cmd-shell-output 事件异步回流
+    }
+
+    // ---- 2) 裸 adb shell：进入交互式设备 shell 会话 ----
+    const m = trimmed.match(BARE_ADB_SHELL_RE);
+    if (m) {
+        // 显式 -s 优先；否则用当前选中设备；都没有则由后端按在线设备数判定
+        const serial = m[1] || currentSerial || "";
+        const sres = await run(window.go.main.App.StartShell(serial));
+        if (!sres.ok) {
+            appendCmdTermLine("❌ 进入设备 shell 失败：" + sres.err);
+            return;
+        }
+        shellActive = true;
+        shellLabel = serial || "adb-shell";
+        $("cmd-term-prompt").textContent = shellLabel + " #";
+        appendCmdTermLine("[已进入设备 shell：输入设备端命令回车执行，输入 exit 退出]");
+        return;
+    }
+
+    // ---- 3) 普通命令：本机 cmd 执行 ----
     const res = await run(window.go.main.App.RunCmd(trimmed));
     if (!res.ok) {
         appendCmdTermLine("❌ 命令启动失败：" + res.err);
@@ -1623,6 +1667,28 @@ async function execCmdTerm(command) {
     }
     // cd 可能改变了会话目录：刷新提示符
     await updateTermPrompt();
+}
+
+// 本地主动停止 shell 会话（切换设备等场景）；自然退出（exit/断开）走 onShellEnded
+async function stopShellSession(reason) {
+    if (!shellActive) {
+        return;
+    }
+    shellActive = false;
+    await run(window.go.main.App.StopShellTerm());
+    appendCmdTermLine("[" + reason + "]");
+    await updateTermPrompt();
+}
+
+// 会话结束事件处理（后端 "cmd-shell-ended"：exit / 设备断开 / adb 退出）。
+// 本地主动停止时 shellActive 已先置 false，这里直接跳过避免重复提示
+function onShellEnded() {
+    if (!shellActive) {
+        return;
+    }
+    shellActive = false;
+    appendCmdTermLine("[设备 shell 已退出，回到本机命令行]");
+    updateTermPrompt();
 }
 
 // 命令输入框按键处理：Enter 执行并清空输入；↑/↓ 翻历史
@@ -1913,6 +1979,11 @@ async function onDeviceChanged(newSerial) {
 
     currentSerial = newSerial;
 
+    // shell 会话绑定在旧设备上：设备变化即停止（重新进入即可切到新设备）
+    if (prev !== newSerial) {
+        await stopShellSession("目标设备已变化，设备 shell 会话已停止");
+    }
+
     // 同步复合框显示（选中态：框内显示序列号 + 状态灯 + ×；清除态全部复位）
     const combo = $("device-combo");
     if (newSerial) {
@@ -2163,6 +2234,11 @@ function init() {
     window.runtime.EventsOn("live-log-lines", onLiveLines);
     // 订阅会话结束事件（用户停止 / 设备断开 / adb 退出）
     window.runtime.EventsOn("live-log-ended", onLiveEnded);
+    // 订阅交互 shell 输出/结束事件（Go 侧逐行推送；exit/断开/主动停止触发结束）
+    window.runtime.EventsOn("cmd-shell-output", function (line) {
+        appendCmdTermLine(line);
+    });
+    window.runtime.EventsOn("cmd-shell-ended", onShellEnded);
 
     // ---- 操作反馈栏（固定高度面板：收起/展开/拖拽调高） ----
     // 清空按钮按当前模式分发（操作反馈 / 命令行输出 / 实时日志）

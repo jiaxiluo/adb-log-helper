@@ -62,6 +62,10 @@ export function IsRecording() {
   return window['go']['main']['App']['IsRecording']();
 }
 
+export function IsShellRunning() {
+  return window['go']['main']['App']['IsShellRunning']();
+}
+
 export function ListPackages(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListPackages'](arg1, arg2, arg3);
 }
@@ -114,6 +118,10 @@ export function StartScreenRecord(arg1, arg2) {
   return window['go']['main']['App']['StartScreenRecord'](arg1, arg2);
 }
 
+export function StartShell(arg1) {
+  return window['go']['main']['App']['StartShell'](arg1);
+}
+
 export function StopLiveLog() {
   return window['go']['main']['App']['StopLiveLog']();
 }
@@ -126,6 +134,14 @@ export function StopScreenRecord() {
   return window['go']['main']['App']['StopScreenRecord']();
 }
 
+export function StopShellTerm() {
+  return window['go']['main']['App']['StopShellTerm']();
+}
+
 export function Uninstall(arg1, arg2) {
   return window['go']['main']['App']['Uninstall'](arg1, arg2);
+}
+
+export function WriteShell(arg1) {
+  return window['go']['main']['App']['WriteShell'](arg1);
 }
