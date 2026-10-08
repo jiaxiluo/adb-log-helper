@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+  文件名称 : manual-android-v1.0.0.html
+  功    能 : ADB 助手（安卓版 V1.0.0）图解操作手册 —— 基础功能速用版。
+             每页一个功能：一张截图 + 几个编号点击步骤。图片与 HTML 同级子目录。
+============================================================================ -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ADB 助手 图解操作手册 V1.0.0（安卓版）</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root { --ink:#1e293b; --sub:#64748b; --brand:#059669; --warn:#b45309;
+        --line:#e2e8f0; --soft:#f1f5f9; }
+@page { size: A4; margin: 0; }
+html, body { width: 210mm; }
+body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+       color: var(--ink); font-size: 11pt; line-height: 1.6; }
+.page { width: 210mm; height: 297mm; position: relative;
+        padding: 15mm 14mm 16mm; page-break-after: always;
+        overflow: hidden; background: #fff; }
+.page:last-child { page-break-after: auto; }
+
+.phead { position: absolute; top: 7mm; left: 14mm; right: 14mm;
+         display: flex; justify-content: space-between; font-size: 8.5pt;
+         color: var(--sub); border-bottom: 1.5pt solid var(--brand); padding-bottom: 2mm; }
+.phead b { color: var(--brand); }
+.pfoot { position: absolute; bottom: 7mm; left: 14mm; right: 14mm;
+         display: flex; justify-content: space-between; font-size: 8.5pt; color: var(--sub); }
+.pfoot .pn { font-weight: 700; color: var(--ink); }
+
+.cover { display: flex; flex-direction: column;
+         background: linear-gradient(160deg, #065f46 0%, #059669 58%, #10b981 100%);
+         color: #fff; padding: 22mm 20mm; }
+.cover-brand { font-size: 12pt; letter-spacing: 4px; opacity: .85; }
+.cover-title { font-size: 36pt; font-weight: 700; margin-top: 44mm; line-height: 1.3; }
+.cover-sub { font-size: 14pt; margin-top: 6mm; opacity: .92; }
+.cover-meta { margin-top: auto; border-top: 1px solid rgba(255,255,255,.35);
+              padding-top: 6mm; font-size: 11pt; line-height: 2; opacity: .95; }
+.cover-badge { display: inline-block; background: rgba(255,255,255,.16);
+               border: 1px solid rgba(255,255,255,.4); border-radius: 20px;
+               padding: 1mm 5mm; font-size: 10pt; margin-right: 3mm; }
+
+h2.chap { font-size: 16pt; color: #047857; margin-bottom: 3mm;
+          padding-left: 4mm; border-left: 4.5pt solid var(--brand); line-height: 1.35; }
+h2.chap .no { display: inline-block; background: var(--brand); color: #fff;
+              border-radius: 4px; font-size: 11pt; padding: 0.5mm 3mm;
+              margin-right: 3mm; vertical-align: 2px; }
+p.lead { color: var(--sub); margin-bottom: 3mm; }
+b.k { color: #047857; }
+
+.step { display: flex; margin-bottom: 2.6mm; align-items: flex-start; }
+.step .n { flex: 0 0 auto; width: 6.4mm; height: 6.4mm; border-radius: 50%;
+           background: var(--brand); color: #fff; font-weight: 700; font-size: 10pt;
+           text-align: center; line-height: 6.4mm; margin-right: 3mm; margin-top: 0.3mm; }
+.step .t { flex: 1; }
+
+.tip, .warn { border-radius: 2.5mm; padding: 2.8mm 4mm; margin: 2.8mm 0;
+              font-size: 9.8pt; line-height: 1.55; }
+.tip { background: #ecfdf5; border-left: 3.5pt solid #10b981; }
+.warn { background: #fffbeb; border-left: 3.5pt solid #f59e0b; }
+.tip b:first-child, .warn b:first-child { display: block; margin-bottom: 1mm; }
+
+/* 图：手机截图并排为主视觉 */
+figure { margin: 3mm 0; text-align: center; }
+figure img { max-width: 62%; max-height: 120mm; border: 1px solid var(--line);
+             border-radius: 3mm; }
+figure.two { display: flex; gap: 5mm; justify-content: center; align-items: flex-start; }
+figure.two img { max-width: 44%; max-height: 122mm; }
+figcaption { font-size: 8.8pt; color: var(--sub); margin-top: 1.6mm; }
+</style>
+</head>
+<body>
+
+<!-- ==================== 封面 ==================== -->
+<div class="page cover">
+    <div class="cover-brand">ADB-HELPER · ANDROID</div>
+    <div class="cover-title">ADB 助手<br>图解操作手册</div>
+    <div class="cover-sub">安卓手机版 · 现场应急：装 APK · 抓日志</div>
+    <div class="cover-meta">
+        <span class="cover-badge">版本 V1.0.0</span><span class="cover-badge">Android 8.0+</span><br>
+        每页一个功能：看图找绿圈 ❶❷❸ → 在 App 里点同一个按钮<br>
+        无需电脑、无需命令行
+    </div>
+</div>
+
+<!-- ==================== 界面地图 ==================== -->
+<div class="page">
+    <div class="phead"><span><b>ADB 助手</b> 图解操作手册</span><span>界面地图</span></div>
+    <h2 class="chap">先看这张图：三张卡片是干嘛的</h2>
+    <p class="lead">App 只有一屏、三张卡片，从上到下按顺序用：</p>
+    <figure>
+        <img src="android-shots/a00-overview.png" alt="三大卡片">
+    </figure>
+    <div class="step"><div class="n">1</div><div class="t"><b class="k">设备连接</b> —— 输电视 IP 连接，
+    连过的设备自动记住，点历史记录一键直连（第 1 章）。</div></div>
+    <div class="step"><div class="n">2</div><div class="t"><b class="k">安装 APK</b> —— 把手机里收到的 APK
+    推到电视上安装（第 2 章）。</div></div>
+    <div class="step"><div class="n">3</div><div class="t"><b class="k">抓日志</b> —— 开始/结束两键抓电视日志，
+    结束直接分享到微信/钉钉（第 3 章）。</div></div>
+    <div class="warn"><b>⚠ 顺序要求</b>
+    没连接设备时，下面两卡<b>置灰不可点</b>——先连上电视，自动解锁。</div>
+</div>
+
+<!-- ==================== 01 连接 ==================== -->
+<div class="page">
+    <div class="phead"><span><b>ADB 助手</b> 图解操作手册</span><span>01 · 连接电视</span></div>
+    <h2 class="chap"><span class="no">01</span>连接电视 / 盒子</h2>
+    <p class="lead">前提：手机和电视连<b class="k">同一个 WiFi</b>；电视设置里打开「ADB 调试」开关
+    （小米电视：设置→账号与安全→ADB 调试；其他品牌在设置里搜"调试"）。</p>
+
+    <div class="step"><div class="n">1</div><div class="t">在「设备连接」卡 ❶ <b>输入电视的 IP</b>
+    （电视上：设置→网络 里能查到，形如 192.168.90.31）。</div></div>
+    <div class="step"><div class="n">2</div><div class="t">点 ❷<b class="k">「连接」</b>。首次连接时
+    <b>电视屏幕会弹授权框</b>，勾"始终允许"再点允许。</div></div>
+    <div class="step"><div class="n">3</div><div class="t">状态灯变绿、显示型号 = 连上了，下面两卡自动解锁。</div></div>
+    <figure class="two">
+        <img src="android-shots/a02-ip-input.png" alt="输入 IP">
+        <img src="android-shots/a03-connected.png" alt="连接成功">
+        <figcaption>▲ ❶ 输入 IP → ❷ 点「连接」　→　连上后显示电视信息</figcaption>
+    </figure>
+    <div class="tip"><b>💡 下次再连</b>
+    App 记住连过的设备：<b>点历史记录一行就直连</b>；行尾 × 可删掉不要的记录。</div>
+    <div class="warn"><b>⚠ 连不上时</b>
+    电视 ADB 开关是否打开 → IP 是否变了（电视重启后会变）→ 是否同一 WiFi → 电视是否休眠（先唤醒）。</div>
+</div>
+
+<!-- ==================== 02 装 APK ==================== -->
+<div class="page">
+    <div class="phead"><span><b>ADB 助手</b> 图解操作手册</span><span>02 · 安装 APK</span></div>
+    <h2 class="chap"><span class="no">02</span>给电视装 APK</h2>
+    <p class="lead">把微信/QQ 里收到的 APK 安装包推到电视上装，覆盖安装、电视上原有数据保留。</p>
+
+    <div class="step"><div class="n">1</div><div class="t">点 ❶<b class="k">「选择 APK 安装」</b>，
+    在手机文件里找到收到的 APK 文件。</div></div>
+    <div class="step"><div class="n">2</div><div class="t">选完显示文件名和大小 → 点 ❷<b class="k">「开始安装」</b>，
+    等"正在传输并安装"提示走完（大包需稍等）。</div></div>
+    <div class="step"><div class="n">3</div><div class="t"><b class="k">✓ 安装成功</b>即完成，电视桌面上能看到新应用；
+    失败时会给<b>中文原因</b>（比如"新包版本号比设备上已装的旧" = 需先卸载电视上的旧版）。</div></div>
+    <figure class="two">
+        <img src="android-shots/a05-apk-selected.png" alt="已选文件">
+        <img src="android-shots/a06-install-ok.png" alt="安装成功">
+        <figcaption>▲ ❶ 选 APK → ❷ 开始安装　→　✓ 成功</figcaption>
+    </figure>
+</div>
+
+<!-- ==================== 03 抓日志 ==================== -->
+<div class="page">
+    <div class="phead"><span><b>ADB 助手</b> 图解操作手册</span><span>03 · 抓日志并分享</span></div>
+    <h2 class="chap"><span class="no">03</span>抓日志，当场发微信群</h2>
+    <p class="lead">两键式：<b class="k">开始抓取</b> → 去电视上复现问题 → <b class="k">结束并分享</b>。
+    抓取时可退出 App、可息屏，后台继续抓。</p>
+
+    <div class="step"><div class="n">1</div><div class="t">点 ❶<b class="k">「开始抓取」</b>，红点闪烁 + 计时开始。</div></div>
+    <div class="step"><div class="n">2</div><div class="t"><b>去电视上复现你要排查的问题</b>。</div></div>
+    <div class="step"><div class="n">3</div><div class="t">回 App 点「结束并分享」→ 弹出 ❷ 分享面板 →
+    选<b class="k">微信/钉钉/QQ</b>，当场发回群里。</div></div>
+    <figure class="two">
+        <img src="android-shots/a08-logging.png" alt="抓取中">
+        <img src="android-shots/a09-share-sheet.png" alt="分享面板">
+        <figcaption>▲ ❶ 抓取中（计时走表）　→　❷ 结束后直接拉起分享</figcaption>
+    </figure>
+    <div class="tip"><b>💡 提示</b>
+    日志文件名和电脑版工具一致（adb_log_日期_时间.log），开发拿到直接能看；
+    抓取中设备断开会自动停止保护，已抓的内容不丢。</div>
+</div>
+
+<!-- ==================== 封底 ==================== -->
+<div class="page" style="display:flex;flex-direction:column;justify-content:center;
+     align-items:center;text-align:center;color:#fff;
+     background:linear-gradient(200deg,#065f46 0%,#059669 60%,#10b981 100%)">
+    <div style="font-size:20pt;font-weight:700;margin-bottom:6mm">ADB 助手 · 图解操作手册</div>
+    <div style="font-size:11pt;opacity:.9;line-height:2">
+        安卓版 V1.0.0 ｜ 基础功能速用版<br>
+        与桌面版 ADB 工具配合使用
+    </div>
+</div>
+
+</body>
+</html>
